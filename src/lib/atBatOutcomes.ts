@@ -15,7 +15,9 @@ export const AT_BAT_OUT_DELTA: Record<AtBatResult, number> = {
   Flyout: 1,
   Popout: 1,
   "Double Play": 2,
+  "Triple Play": 3,
   "Sac Fly": 1,
   "Fielder's Choice": 1,
   Error: 0,
+  "At-bat still in progress": 0,
 };

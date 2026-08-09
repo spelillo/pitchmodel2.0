@@ -3,10 +3,10 @@ import { CountControl } from "./CountControl";
 import { OutsControl } from "./OutsControl";
 import { BaseDiamond } from "./BaseDiamond";
 import { InningControl } from "./InningControl";
-import { PreviousPitch } from "./PreviousPitch";
-import { PitchOutcomeLogger } from "./PitchOutcomeLogger";
+import { PitchThrownSelector } from "./PitchThrownSelector";
 import { PitchResultLogger } from "./PitchResultLogger";
 import { AtBatResultLogger } from "./AtBatResultLogger";
+import { LogPitchButton } from "./LogPitchButton";
 
 const BALLS_VALUES = [0, 1, 2, 3] as const;
 const STRIKES_VALUES = [0, 1, 2] as const;
@@ -19,13 +19,15 @@ interface GameSituationProps {
   onToggleRunner: (base: keyof GameState["runners"]) => void;
   onInningChange: (inning: number) => void;
   onInningHalfChange: (half: "top" | "bottom") => void;
-  onPreviousPitchChange: (pitch: GameState["previousPitch"]) => void;
   predictedPitch: PitchType | null;
-  awaitingLog: boolean;
-  loggedActual: PitchType | null;
-  onLogPitchType: (actual: PitchType) => void;
-  onLogPitchResult: (outcome: PitchResultOutcome) => void;
-  onLogAtBatResult: (result: AtBatResult) => void;
+  pitchThrown: PitchType | null;
+  onPitchThrownChange: (pitch: PitchType) => void;
+  pitchResult: PitchResultOutcome | null;
+  onPitchResultChange: (outcome: PitchResultOutcome) => void;
+  atBatResult: AtBatResult | null;
+  onAtBatResultChange: (result: AtBatResult) => void;
+  canLogPitch: boolean;
+  onLogPitch: () => void;
 }
 
 export function GameSituation({
@@ -36,13 +38,15 @@ export function GameSituation({
   onToggleRunner,
   onInningChange,
   onInningHalfChange,
-  onPreviousPitchChange,
   predictedPitch,
-  awaitingLog,
-  loggedActual,
-  onLogPitchType,
-  onLogPitchResult,
-  onLogAtBatResult,
+  pitchThrown,
+  onPitchThrownChange,
+  pitchResult,
+  onPitchResultChange,
+  atBatResult,
+  onAtBatResultChange,
+  canLogPitch,
+  onLogPitch,
 }: GameSituationProps) {
   return (
     <section aria-label="Game situation" className="bevel-out bg-win-face">
@@ -85,35 +89,26 @@ export function GameSituation({
             onInningChange={onInningChange}
             onHalfChange={onInningHalfChange}
           />
+          <PitchThrownSelector
+            predictedPitch={predictedPitch}
+            selected={pitchThrown}
+            onSelect={onPitchThrownChange}
+          />
         </div>
       </div>
 
       <hr className="groove mx-3" />
 
-      <div className="p-3">
-        <PreviousPitch
-          pitch={gameState.previousPitch}
-          onPitchChange={onPreviousPitchChange}
-        />
-      </div>
-
-      <hr className="groove mx-3" />
-
       <div className="flex flex-col gap-3 p-3">
-        <PitchResultLogger
-          balls={gameState.balls}
-          strikes={gameState.strikes}
-          onLog={onLogPitchResult}
+        <PitchResultLogger selected={pitchResult} onSelect={onPitchResultChange} />
+
+        <AtBatResultLogger
+          selected={atBatResult}
+          onSelect={onAtBatResultChange}
+          disabled={pitchResult === null}
         />
 
-        <PitchOutcomeLogger
-          predictedPitch={predictedPitch}
-          awaitingLog={awaitingLog}
-          loggedActual={loggedActual}
-          onLog={onLogPitchType}
-        />
-
-        <AtBatResultLogger onLog={onLogAtBatResult} />
+        <LogPitchButton disabled={!canLogPitch} onClick={onLogPitch} />
       </div>
     </section>
   );

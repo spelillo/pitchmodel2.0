@@ -7,5 +7,6 @@ npm-debug.log*
 .env*.local
 .vercel
 next-env.d.ts
+tsconfig.tsbuildinfo
 .claude/settings.local.json
 agent-skills-for-context-engineering

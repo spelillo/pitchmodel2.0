@@ -6,9 +6,10 @@ import { SimilarSituations } from "./SimilarSituations";
 interface PredictionResultProps {
   result: PredictionResultType | null;
   loading: boolean;
+  emptyMessage: string;
 }
 
-export function PredictionResult({ result, loading }: PredictionResultProps) {
+export function PredictionResult({ result, loading, emptyMessage }: PredictionResultProps) {
   return (
     <section aria-label="Prediction result" aria-live="polite" className="bevel-out bg-win-face">
       <div
@@ -21,7 +22,7 @@ export function PredictionResult({ result, loading }: PredictionResultProps) {
       </div>
 
       {!result ? (
-        <EmptyState loading={loading} />
+        <EmptyState loading={loading} message={emptyMessage} />
       ) : (
         <div className={loading ? "opacity-60" : "opacity-100"}>
           {/* Hit-counter style pitch display */}
@@ -78,7 +79,7 @@ export function PredictionResult({ result, loading }: PredictionResultProps) {
   );
 }
 
-function EmptyState({ loading }: { loading: boolean }) {
+function EmptyState({ loading, message }: { loading: boolean; message: string }) {
   return (
     <div className="m-3 bevel-in bg-win-black p-8">
       <div className="flex flex-col items-center justify-center gap-2 text-center">
@@ -92,7 +93,7 @@ function EmptyState({ loading }: { loading: boolean }) {
               READY FOR PREDICTION
             </p>
             <p className="max-w-[30ch] font-mono-retro text-2xs text-win-green opacity-70">
-              Set the current game situation and predict the next pitch.
+              {message}
             </p>
             <span aria-hidden="true" className="blink mt-1 font-mono-retro text-lg text-win-green">
               _

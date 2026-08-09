@@ -22,7 +22,7 @@ export const PITCH_TYPES = [
 
 export type PitchType = (typeof PITCH_TYPES)[number];
 
-export const PITCH_RESULTS = ["Ball", "Strike", "Foul Ball"] as const;
+export const PITCH_RESULTS = ["Ball", "Strike", "Foul"] as const;
 
 export type PitchResultOutcome = (typeof PITCH_RESULTS)[number];
 
@@ -38,9 +38,11 @@ export const AT_BAT_RESULTS = [
   "Flyout",
   "Popout",
   "Double Play",
+  "Triple Play",
   "Sac Fly",
   "Fielder's Choice",
   "Error",
+  "At-bat still in progress",
 ] as const;
 
 export type AtBatResult = (typeof AT_BAT_RESULTS)[number];
