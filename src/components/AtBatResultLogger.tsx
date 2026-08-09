@@ -1,5 +1,7 @@
 import { AT_BAT_RESULTS, AtBatResult } from "@/types";
 
+const STILL_IN_PROGRESS: AtBatResult = "At Bat Still In Progress";
+
 interface AtBatResultLoggerProps {
   selected: AtBatResult | null;
   onSelect: (result: AtBatResult) => void;
@@ -20,6 +22,7 @@ export function AtBatResultLogger({ selected, onSelect, disabled }: AtBatResultL
       >
         {AT_BAT_RESULTS.map((result) => {
           const isSelected = result === selected;
+          const isStillInProgress = result === STILL_IN_PROGRESS;
           return (
             <button
               key={result}
@@ -34,7 +37,7 @@ export function AtBatResultLogger({ selected, onSelect, disabled }: AtBatResultL
                   : isSelected
                   ? "bevel-pressed bg-win-yellow text-win-black"
                   : "bevel-out bg-win-white text-win-black hover:bg-win-rowAlt active:bevel-pressed"
-              }`}
+              } ${isStillInProgress ? "outline outline-2 -outline-offset-2 outline-win-black" : ""}`}
             >
               {result}
             </button>

@@ -10,14 +10,24 @@ export interface Player {
 }
 
 export const PITCH_TYPES = [
-  "Four-Seam Fastball",
+  "4-Seam Fastball",
   "Sinker",
   "Cutter",
   "Slider",
   "Sweeper",
+  "Slurve",
   "Curveball",
+  "Knuckle Curve",
+  "Slow Curve",
   "Changeup",
-  "Splitter",
+  "Split-Finger",
+  "Forkball",
+  "Screwball",
+  "Knuckleball",
+  "Eephus",
+  "Pitch Out",
+  "Other",
+  "Unknown",
 ] as const;
 
 export type PitchType = (typeof PITCH_TYPES)[number];
@@ -27,22 +37,28 @@ export const PITCH_RESULTS = ["Ball", "Strike", "Foul"] as const;
 export type PitchResultOutcome = (typeof PITCH_RESULTS)[number];
 
 export const AT_BAT_RESULTS = [
-  "Strikeout",
-  "Walk",
-  "Hit By Pitch",
   "Single",
   "Double",
   "Triple",
   "Home Run",
-  "Groundout",
-  "Flyout",
-  "Popout",
+  "Strikeout",
+  "Walk",
+  "Intent Walk",
+  "Hit By Pitch",
+  "Field Out",
+  "Force Out",
+  "Grounded Into DP",
   "Double Play",
   "Triple Play",
+  "Strikeout DP",
+  "Fielders Choice",
+  "Fielders Choice Out",
+  "Field Error",
   "Sac Fly",
-  "Fielder's Choice",
-  "Error",
-  "At-bat still in progress",
+  "Sac Bunt",
+  "Sac Fly DP",
+  "Catcher Interf",
+  "At Bat Still In Progress",
 ] as const;
 
 export type AtBatResult = (typeof AT_BAT_RESULTS)[number];
@@ -63,7 +79,7 @@ export interface GameState {
   previousPitch: PitchType | null;
 }
 
-export type PitchCategory = "Fastball" | "Breaking Ball" | "Offspeed";
+export type PitchCategory = "Fastball" | "Breaking" | "Off-speed" | "Other";
 
 export interface PitchProbability {
   pitch: PitchType;

@@ -20,7 +20,7 @@ import {
   PitchType,
 } from "@/types";
 
-const AT_BAT_STILL_IN_PROGRESS: AtBatResult = "At-bat still in progress";
+const AT_BAT_STILL_IN_PROGRESS: AtBatResult = "At Bat Still In Progress";
 
 export default function Home() {
   const [pitcher, setPitcher] = useState<Player | null>(PITCHERS[0]);

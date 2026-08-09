@@ -19,6 +19,11 @@ import {
 // `predictNextPitch` with a fetch call to the FastAPI endpoint and keep
 // the same input/output shape (`PredictionRequest` -> `PredictionResult`).
 // No component above this file needs to change.
+//
+// See @/types/api for the documented wire contract (PredictApiRequest /
+// PredictApiResponse) that endpoint is expected to speak — this mock
+// doesn't build or return those shapes yet, it's a reference for whoever
+// wires up the real `fetch()` call.
 // -----------------------------------------------------------------------
 
 function hashString(input: string): number {
@@ -41,31 +46,64 @@ function mulberry32(seed: number) {
   };
 }
 
+const BREAKING_FAMILY: PitchType[] = [
+  "Slider",
+  "Sweeper",
+  "Slurve",
+  "Curveball",
+  "Knuckle Curve",
+  "Slow Curve",
+];
+const OFFSPEED_FAMILY: PitchType[] = [
+  "Changeup",
+  "Split-Finger",
+  "Forkball",
+  "Screwball",
+  "Knuckleball",
+  "Eephus",
+];
+// Situational/administrative "pitch types" — essentially never the model's pick.
+const NON_ARSENAL_TYPES: PitchType[] = ["Pitch Out", "Other", "Unknown"];
+
+// The common, everyday secondary pitches most pitchers lean on. Rarer
+// shapes (slurve, knuckle curve, forkball, ...) still get a small share
+// so the full arsenal is representable, just without dominating.
+const COMMON_SECONDARY: PitchType[] = ["Slider", "Sweeper", "Curveball", "Changeup", "Split-Finger"];
+const RARE_SECONDARY: PitchType[] = BREAKING_FAMILY.concat(OFFSPEED_FAMILY).filter(
+  (pitch) => !COMMON_SECONDARY.includes(pitch)
+);
+
 /** Each pitcher gets a stable, pseudo-random-but-consistent base arsenal. */
 function baseArsenal(pitcherId: string): Record<PitchType, number> {
   const rand = mulberry32(hashString(pitcherId));
   const weights: Partial<Record<PitchType, number>> = {};
 
+  PITCH_TYPES.forEach((pitch) => {
+    weights[pitch] = 0.002;
+  });
+
   // Every pitcher relies most heavily on the fastball family.
-  weights["Four-Seam Fastball"] = 0.34 + rand() * 0.18;
+  weights["4-Seam Fastball"] = 0.34 + rand() * 0.18;
   weights["Sinker"] = rand() * 0.16;
   weights["Cutter"] = rand() * 0.14;
 
-  // Then a primary and secondary breaking/offspeed pitch.
-  const secondary: PitchType[] = [
-    "Slider",
-    "Sweeper",
-    "Curveball",
-    "Changeup",
-    "Splitter",
-  ];
-  secondary.forEach((pitch) => {
+  // A primary and secondary breaking/offspeed pitch from the common pool.
+  COMMON_SECONDARY.forEach((pitch) => {
     weights[pitch] = rand() * 0.22;
   });
 
   // Guarantee at least one strong secondary offering.
-  const featured = secondary[Math.floor(rand() * secondary.length)];
+  const featured = COMMON_SECONDARY[Math.floor(rand() * COMMON_SECONDARY.length)];
   weights[featured] = (weights[featured] ?? 0) + 0.2 + rand() * 0.1;
+
+  // Rarer shapes some pitchers mix in lightly.
+  RARE_SECONDARY.forEach((pitch) => {
+    weights[pitch] = rand() * 0.04;
+  });
+
+  NON_ARSENAL_TYPES.forEach((pitch) => {
+    weights[pitch] = rand() * 0.003;
+  });
 
   return weights as Record<PitchType, number>;
 }
@@ -83,17 +121,15 @@ function applySituationalAdjustments(
 
   // Two-strike counts: pitchers expand the zone with offspeed/breaking stuff.
   if (strikes === 2) {
-    (["Slider", "Sweeper", "Curveball", "Changeup", "Splitter"] as PitchType[]).forEach(
-      (p) => multiply(p, 1.35)
-    );
-    multiply("Four-Seam Fastball", 0.85);
+    BREAKING_FAMILY.concat(OFFSPEED_FAMILY).forEach((p) => multiply(p, 1.35));
+    multiply("4-Seam Fastball", 0.85);
   }
 
   // Hitter's counts (3 balls): pitchers go back to the fastball for a strike.
   if (balls === 3) {
-    multiply("Four-Seam Fastball", 1.5);
+    multiply("4-Seam Fastball", 1.5);
     multiply("Sinker", 1.25);
-    multiply("Splitter", 0.6);
+    multiply("Split-Finger", 0.6);
     multiply("Curveball", 0.65);
   }
 
@@ -104,7 +140,7 @@ function applySituationalAdjustments(
   if (onBase) {
     multiply("Sinker", 1.15);
     multiply("Cutter", 1.1);
-    multiply("Splitter", 0.75);
+    multiply("Split-Finger", 0.75);
     multiply("Curveball", 0.85);
   }
 
@@ -118,11 +154,11 @@ function applySituationalAdjustments(
   // toward a complementary pitch (fastball -> changeup is classic).
   if (previousPitch) {
     multiply(previousPitch, 0.55);
-    if (previousPitch === "Four-Seam Fastball" || previousPitch === "Sinker") {
+    if (previousPitch === "4-Seam Fastball" || previousPitch === "Sinker") {
       multiply("Changeup", 1.25);
       multiply("Slider", 1.1);
     } else {
-      multiply("Four-Seam Fastball", 1.15);
+      multiply("4-Seam Fastball", 1.15);
     }
   }
 

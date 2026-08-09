@@ -1,16 +1,26 @@
 import { PitchCategory, PitchType } from "@/types";
 
-// Every pitch type in the app's arsenal, grouped into the three families
+// Every pitch type in the app's arsenal, grouped into the families
 // analysts actually talk about. Extend this map first if PITCH_TYPES grows.
 export const PITCH_CATEGORY_MAP: Record<PitchType, PitchCategory> = {
-  "Four-Seam Fastball": "Fastball",
+  "4-Seam Fastball": "Fastball",
   Sinker: "Fastball",
   Cutter: "Fastball",
-  Slider: "Breaking Ball",
-  Sweeper: "Breaking Ball",
-  Curveball: "Breaking Ball",
-  Changeup: "Offspeed",
-  Splitter: "Offspeed",
+  Slider: "Breaking",
+  Sweeper: "Breaking",
+  Slurve: "Breaking",
+  Curveball: "Breaking",
+  "Knuckle Curve": "Breaking",
+  "Slow Curve": "Breaking",
+  Changeup: "Off-speed",
+  "Split-Finger": "Off-speed",
+  Forkball: "Off-speed",
+  Screwball: "Off-speed",
+  Knuckleball: "Off-speed",
+  Eephus: "Off-speed",
+  "Pitch Out": "Other",
+  Other: "Other",
+  Unknown: "Other",
 };
 
 export function pitchCategory(pitch: PitchType): PitchCategory {
