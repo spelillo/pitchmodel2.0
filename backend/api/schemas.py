@@ -52,10 +52,14 @@ class LogPitchApiRequest(ApiSituation):
 
 
 class LogPitchApiResponse(BaseModel):
-    # Partial-credit accuracy for this one pitch. The 0.7 / 0.5 tiers
-    # aren't resolved yet — see memory/backend_spec.md. Only 1.0 (exact
-    # match) and 0.0 (miss) are meaningful right now.
-    accuracy_score: Literal[1.0, 0.7, 0.5, 0.0]
+    # This pitch's score, mirroring src/lib/pitchCategories.ts exactly:
+    # true_accuracy is 1 only on an exact pitch match; adjusted_accuracy
+    # gives partial credit (0.75) for a same-category miss.
+    true_accuracy: Literal[0, 1]
+    adjusted_accuracy: Literal[0, 0.75, 1]
+    # Running session totals: session_true_accuracy is (sum of
+    # true_accuracy) / pitch count; session_adjusted_accuracy is the
+    # same over adjusted_accuracy.
     session_true_accuracy: float
     session_adjusted_accuracy: float
     balls: Literal[0, 1, 2, 3]

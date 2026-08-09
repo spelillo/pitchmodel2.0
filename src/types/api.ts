@@ -66,9 +66,15 @@ export interface LogPitchApiRequest extends ApiSituation {
 
 /** POST /api/v1/log-pitch response body. */
 export interface LogPitchApiResponse {
-  // Partial-credit accuracy for this one pitch. The 0.7 / 0.5 tiers are
-  // not yet defined — see the "Scoring" decision still open on this spec.
-  accuracy_score: 1.0 | 0.7 | 0.5 | 0.0;
+  // This pitch's score, mirroring @/lib/pitchCategories.ts's
+  // trueAccuracy/adjustedAccuracy exactly: true_accuracy is 1 only on an
+  // exact pitch match; adjusted_accuracy gives partial credit (0.75) for
+  // a same-category miss.
+  true_accuracy: 0 | 1;
+  adjusted_accuracy: 0 | 0.75 | 1;
+  // Running session totals: session_true_accuracy is (sum of
+  // true_accuracy) / pitch count; session_adjusted_accuracy is the same
+  // over adjusted_accuracy.
   session_true_accuracy: number;
   session_adjusted_accuracy: number;
   // Game state the server advanced to after applying pitch_result /

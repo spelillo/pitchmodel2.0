@@ -107,11 +107,17 @@ def log_pitch(payload: LogPitchApiRequest) -> LogPitchApiResponse:
     pool = nearest_neighbors(pitcher_history, payload, session_df)
     prediction = _build_prediction(pool)
 
-    # Only the exact-match tier is resolved right now (see schemas.py's
-    # LogPitchApiResponse docstring) — 0.7/0.5 are placeholders until
-    # that scoring decision is made, so this only ever returns 1.0 or 0.0.
-    true_accuracy = 1.0 if payload.actual_pitch == prediction.top_prediction.pitch_type else 0.0
-    adjusted_accuracy = true_accuracy
+    # Mirrors src/lib/pitchCategories.ts's trueAccuracy/adjustedAccuracy
+    # exactly: full credit only for an exact match, partial credit for
+    # landing in the same pitch family, nothing otherwise.
+    predicted_pitch = prediction.top_prediction.pitch_type
+    actual_pitch = payload.actual_pitch
+    if actual_pitch == predicted_pitch:
+        true_accuracy, adjusted_accuracy = 1, 1
+    elif PITCH_CATEGORY_MAP.get(predicted_pitch) == PITCH_CATEGORY_MAP.get(actual_pitch):
+        true_accuracy, adjusted_accuracy = 0, 0.75
+    else:
+        true_accuracy, adjusted_accuracy = 0, 0
 
     session_state = SESSION_STORE.add_pitch(
         payload.session_id,
@@ -146,7 +152,8 @@ def log_pitch(payload: LogPitchApiRequest) -> LogPitchApiResponse:
         situation = apply_at_bat_result(situation, payload.at_bat_result)
 
     return LogPitchApiResponse(
-        accuracy_score=true_accuracy,
+        true_accuracy=true_accuracy,
+        adjusted_accuracy=adjusted_accuracy,
         session_true_accuracy=session_state.true_accuracy,
         session_adjusted_accuracy=session_state.adjusted_accuracy,
         balls=situation.balls,
