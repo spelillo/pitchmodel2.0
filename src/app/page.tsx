@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
+import { AboutPage } from "@/components/AboutPage";
 import { SessionBar } from "@/components/SessionBar";
 import { PlayerSelector } from "@/components/PlayerSelector";
 import { GameSituation } from "@/components/GameSituation";
@@ -23,6 +24,7 @@ import {
 const AT_BAT_STILL_IN_PROGRESS: AtBatResult = "At Bat Still In Progress";
 
 export default function Home() {
+  const [view, setView] = useState<"home" | "about">("home");
   const [pitcher, setPitcher] = useState<Player | null>(PITCHERS[0]);
   const [batter, setBatter] = useState<Player | null>(BATTERS[0]);
 
@@ -156,8 +158,11 @@ export default function Home() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      <AppHeader />
+      <AppHeader view={view} onNavigate={setView} />
 
+      {view === "about" ? (
+        <AboutPage />
+      ) : (
       <main className="mx-auto flex w-full max-w-[1360px] flex-1 flex-col gap-3 p-3 lg:grid lg:grid-cols-[minmax(0,1fr)_420px] lg:items-start lg:gap-3">
         {/* LEFT: setup */}
         <div className="flex flex-col gap-3">
@@ -225,6 +230,7 @@ export default function Home() {
           />
         </div>
       </main>
+      )}
 
       {/* Status bar */}
       <footer className="flex h-6 shrink-0 items-center justify-between border-t-2 border-win-white bg-win-face px-2">

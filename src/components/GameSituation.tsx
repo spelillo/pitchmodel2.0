@@ -80,7 +80,7 @@ export function GameSituation({
 
       <hr className="groove mx-3" />
 
-      <div className="grid grid-cols-[176px_1fr] gap-3 p-3">
+      <div className="grid grid-cols-[auto_1fr] gap-3 p-3">
         <BaseDiamond runners={gameState.runners} onToggle={onToggleRunner} />
         <div className="flex flex-col gap-3">
           <InningControl

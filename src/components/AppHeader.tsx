@@ -1,4 +1,11 @@
-export function AppHeader() {
+type View = "home" | "about";
+
+interface AppHeaderProps {
+  view: View;
+  onNavigate: (view: View) => void;
+}
+
+export function AppHeader({ view, onNavigate }: AppHeaderProps) {
   return (
     <header className="shrink-0">
       {/* Windows 95 title bar */}
@@ -23,10 +30,8 @@ export function AppHeader() {
 
       {/* Menu bar */}
       <div className="flex h-6 items-center gap-4 border-b-2 border-win-midGray bg-win-face px-2 text-2xs">
-        <span className="underline decoration-1 underline-offset-2">File</span>
-        <span className="underline decoration-1 underline-offset-2">Model</span>
-        <span className="underline decoration-1 underline-offset-2">View</span>
-        <span className="underline decoration-1 underline-offset-2">Help</span>
+        <MenuItem label="Home" active={view === "home"} onClick={() => onNavigate("home")} />
+        <MenuItem label="About" active={view === "about"} onClick={() => onNavigate("about")} />
       </div>
 
       {/* Marquee banner */}
@@ -50,6 +55,29 @@ function TitleBarIcon() {
       <path d="M7 6C5.5 8 5 10 5 12s.5 4 2 6" stroke="#FF0000" strokeWidth="1" />
       <path d="M17 6c1.5 2 2 4 2 6s-.5 4-2 6" stroke="#FF0000" strokeWidth="1" />
     </svg>
+  );
+}
+
+function MenuItem({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-current={active ? "page" : undefined}
+      onClick={onClick}
+      className={`underline decoration-1 underline-offset-2 hover:text-win-blue ${
+        active ? "font-bold" : ""
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 
