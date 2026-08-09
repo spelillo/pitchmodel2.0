@@ -1,15 +1,13 @@
 import { AtBatResult, Handedness, PitchCategory, PitchResultOutcome, PitchType } from "@/types";
 
 // -----------------------------------------------------------------------
-// FUTURE BACKEND CONTRACT
+// LIVE BACKEND CONTRACT
 //
 // These types describe the wire shape of the FastAPI KNN prediction
-// service from the PitchModel 2.0 system spec — not yet implemented or
-// called anywhere in this app. They exist so the eventual `fetch()` calls
-// in lib/predictionService.ts have a documented target to code against.
-// Field names are snake_case to mirror the JSON the backend will send,
-// unlike the camelCase domain types in "@/types" that the rest of the
-// frontend consumes.
+// service, live at https://pitchmodel2-0.onrender.com. Field names are
+// snake_case to mirror the JSON the backend actually sends, unlike the
+// camelCase domain types in "@/types" that the rest of the frontend
+// consumes — lib/predictionService.ts is the adapter between the two.
 //
 // Distance formula (weighted KNN, lower = more similar):
 //   distance = |Δballs| × 5.83 + |Δstrikes| × 8.75 + |Δouts| × 5.0
@@ -47,6 +45,12 @@ export interface ApiPitchPrediction {
   confidence: number; // 0-1
 }
 
+export interface ApiRankedPitch {
+  pitch_type: PitchType;
+  count: number;
+  probability: number; // 0-1, count / sample_count
+}
+
 /** POST /api/v1/predict request body. */
 export type PredictApiRequest = ApiSituation;
 
@@ -55,6 +59,9 @@ export interface PredictApiResponse {
   top_prediction: ApiPitchPrediction;
   secondary_prediction: ApiPitchPrediction | null;
   confidence_pct: number; // 0-100, top_prediction.confidence expressed as a percentage
+  // Full breakdown (up to 5 pitches, sorted by count desc) — top_prediction
+  // and secondary_prediction are ranked_pitches[0]/[1].
+  ranked_pitches: ApiRankedPitch[];
   category_breakdown: Partial<Record<PitchCategory, number>>;
   sample_count: number; // size of the k=50 candidate pool actually used
   exact_match_count: number; // candidates with distance = 0.0 (live session matches)

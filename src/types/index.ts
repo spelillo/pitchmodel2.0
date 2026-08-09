@@ -7,6 +7,11 @@ export interface Player {
   throws?: Handedness; // pitchers
   bats?: Handedness; // batters
   role: "pitcher" | "batter";
+  // Pitchers only. The prediction API's player_name filter matches
+  // Statcast's own "Last, First" format exactly (e.g. "Cease, Dylan"),
+  // which is *not* the same string as `name` ("Dylan Cease", from the
+  // MLB Stats API) — sending `name` there would 404 on every request.
+  statcastName?: string;
 }
 
 export const PITCH_TYPES = [
@@ -101,9 +106,10 @@ export interface PredictionResult {
 }
 
 export interface PredictionRequest {
-  pitcherId: string;
-  batterId: string;
+  pitcher: Player;
+  batter: Player;
   gameState: GameState;
+  sessionId: string;
 }
 
 /** One logged outcome: a prediction that was checked against the pitch that
@@ -124,5 +130,9 @@ export interface LoggedPitch {
 export interface SessionState {
   active: boolean;
   startedAt: number | null;
+  // Identifies this session to the prediction API's in-memory session
+  // cache (live 2x-weighting + running accuracy) — null until a session
+  // starts, since predictions only run while a session is active anyway.
+  sessionId: string | null;
   log: LoggedPitch[];
 }

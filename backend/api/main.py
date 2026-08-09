@@ -25,6 +25,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from storage.duckdb_adapter import DEFAULT_DB_PATH, TABLE_NAME, ensure_db_present  # noqa: E402
@@ -40,10 +41,20 @@ from .schemas import (
     LogPitchApiResponse,
     PredictApiRequest,
     PredictApiResponse,
+    RankedPitch,
 )
 from .session_cache import SESSION_STORE, LoggedPitch
 
 BASE_CON: duckdb.DuckDBPyConnection | None = None
+
+# The frontend runs on a different origin (GitHub Pages) than this API
+# (Render), so the browser needs explicit permission to call it.
+# localhost:3000 is included for local frontend dev against this
+# deployed API (or a locally-run instance of it).
+ALLOWED_ORIGINS = [
+    "https://spelillo.github.io",
+    "http://localhost:3000",
+]
 
 
 @asynccontextmanager
@@ -57,6 +68,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="PitchModel API", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["POST"],
+    allow_headers=["Content-Type"],
+)
 
 
 def _candidate_pool(payload: ApiSituation) -> pd.DataFrame:
@@ -84,6 +101,11 @@ def _build_prediction(pool: pd.DataFrame) -> PredictApiResponse:
             pitch_type=counts.index[1], confidence=counts.iloc[1] / total
         )
 
+    ranked_pitches = [
+        RankedPitch(pitch_type=pitch_name, count=int(count), probability=count / total)
+        for pitch_name, count in counts.head(5).items()
+    ]
+
     category_breakdown: dict[str, int] = {}
     for pitch_name, count in counts.items():
         category = PITCH_CATEGORY_MAP.get(pitch_name, "Other")
@@ -93,6 +115,7 @@ def _build_prediction(pool: pd.DataFrame) -> PredictApiResponse:
         top_prediction=ApiPitchPrediction(pitch_type=top_pitch, confidence=top_confidence),
         secondary_prediction=secondary,
         confidence_pct=round(top_confidence * 100, 1),
+        ranked_pitches=ranked_pitches,
         category_breakdown=category_breakdown,
         sample_count=total,
         exact_match_count=int((pool["distance"] == 0.0).sum()),

@@ -66,6 +66,20 @@ def fetch_statcast_counts() -> tuple[dict[int, int], dict[int, int]]:
     return pitcher_counts, batter_counts
 
 
+def fetch_statcast_names() -> dict[int, str]:
+    """pitcher_id -> the exact player_name string Statcast uses for them
+    (e.g. "Cease, Dylan"). The prediction API filters on this exact
+    string, which is *not* the same as the MLB Stats API's "First Last"
+    fullName — verified 1:1 (no pitcher has more than one player_name
+    across the backfill) before relying on this mapping."""
+    con = duckdb.connect(str(DEFAULT_DB_PATH), read_only=True)
+    try:
+        rows = con.execute(f"SELECT DISTINCT pitcher, player_name FROM {TABLE_NAME}").fetchall()
+    finally:
+        con.close()
+    return dict(rows)
+
+
 def build_roster(season: int, min_pitches: int) -> tuple[list[dict], list[dict]]:
     print(f"Fetching {season} MLB roster + teams from statsapi.mlb.com ...")
     team_abbrev = fetch_team_abbreviations()
@@ -73,6 +87,7 @@ def build_roster(season: int, min_pitches: int) -> tuple[list[dict], list[dict]]
     print(f"  {len(players)} players, {len(team_abbrev)} teams")
 
     pitcher_counts, batter_counts = fetch_statcast_counts()
+    statcast_names = fetch_statcast_names()
     print(
         f"  {len(pitcher_counts)} distinct pitchers, "
         f"{len(batter_counts)} distinct batters in backfill"
@@ -89,11 +104,13 @@ def build_roster(season: int, min_pitches: int) -> tuple[list[dict], list[dict]]
 
         pitch_count = pitcher_counts.get(mlbam_id, 0)
         throws = (p.get("pitchHand") or {}).get("code")
-        if pitch_count >= min_pitches and throws in ("L", "R"):
+        statcast_name = statcast_names.get(mlbam_id)
+        if pitch_count >= min_pitches and throws in ("L", "R") and statcast_name:
             pitchers.append(
                 {
                     "id": str(mlbam_id),
                     "name": p["fullName"],
+                    "statcastName": statcast_name,
                     "team": team,
                     "throws": throws,
                     "role": "pitcher",
@@ -125,13 +142,26 @@ def build_roster(season: int, min_pitches: int) -> tuple[list[dict], list[dict]]
     return pitchers, batters
 
 
+def _js_string(value: str) -> str:
+    """Escape a value for embedding in a double-quoted TS string literal
+    — matters here since MLB names include apostrophes (O'Neill) and
+    accented characters that need to round-trip correctly."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 def _ts_literal(player: dict) -> str:
-    parts = [f'id: "{player["id"]}"', f'name: "{player["name"]}"', f'team: "{player["team"]}"']
+    parts = [
+        f'id: "{player["id"]}"',
+        f'name: "{_js_string(player["name"])}"',
+        f'team: "{player["team"]}"',
+    ]
     if "throws" in player:
         parts.append(f'throws: "{player["throws"]}"')
     if "bats" in player:
         parts.append(f'bats: "{player["bats"]}"')
     parts.append(f'role: "{player["role"]}"')
+    if "statcastName" in player:
+        parts.append(f'statcastName: "{_js_string(player["statcastName"])}"')
     return "{ " + ", ".join(parts) + " }"
 
 

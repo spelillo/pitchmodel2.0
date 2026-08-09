@@ -4,6 +4,7 @@ import { LoggedPitch, SessionState } from "@/types";
 const EMPTY_SESSION: SessionState = {
   active: false,
   startedAt: null,
+  sessionId: null,
   log: [],
 };
 
@@ -15,7 +16,7 @@ export function useSession() {
   const [session, setSession] = useState<SessionState>(EMPTY_SESSION);
 
   const startSession = useCallback(() => {
-    setSession({ active: true, startedAt: Date.now(), log: [] });
+    setSession({ active: true, startedAt: Date.now(), sessionId: crypto.randomUUID(), log: [] });
   }, []);
 
   const endSession = useCallback(() => {

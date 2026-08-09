@@ -7,9 +7,10 @@ interface PredictionResultProps {
   result: PredictionResultType | null;
   loading: boolean;
   emptyMessage: string;
+  error?: string | null;
 }
 
-export function PredictionResult({ result, loading, emptyMessage }: PredictionResultProps) {
+export function PredictionResult({ result, loading, emptyMessage, error }: PredictionResultProps) {
   return (
     <section aria-label="Prediction result" aria-live="polite" className="bevel-out bg-win-face">
       <div
@@ -22,7 +23,7 @@ export function PredictionResult({ result, loading, emptyMessage }: PredictionRe
       </div>
 
       {!result ? (
-        <EmptyState loading={loading} message={emptyMessage} />
+        <EmptyState loading={loading} message={emptyMessage} error={error} />
       ) : (
         <div className={loading ? "opacity-60" : "opacity-100"}>
           {/* Hit-counter style pitch display */}
@@ -79,27 +80,53 @@ export function PredictionResult({ result, loading, emptyMessage }: PredictionRe
   );
 }
 
-function EmptyState({ loading, message }: { loading: boolean; message: string }) {
-  return (
-    <div className="m-3 bevel-in bg-win-black p-8">
-      <div className="flex flex-col items-center justify-center gap-2 text-center">
-        {loading ? (
+function EmptyState({
+  loading,
+  message,
+  error,
+}: {
+  loading: boolean;
+  message: string;
+  error?: string | null;
+}) {
+  if (loading) {
+    return (
+      <div className="m-3 bevel-in bg-win-black p-8">
+        <div className="flex flex-col items-center justify-center gap-2 text-center">
           <span aria-hidden="true" className="blink font-mono-retro text-lg font-bold text-win-green">
             LOADING...
           </span>
-        ) : (
-          <>
-            <p className="font-mono-retro text-sm font-bold uppercase tracking-wide text-win-green">
-              READY FOR PREDICTION
-            </p>
-            <p className="max-w-[30ch] font-mono-retro text-2xs text-win-green opacity-70">
-              {message}
-            </p>
-            <span aria-hidden="true" className="blink mt-1 font-mono-retro text-lg text-win-green">
-              _
-            </span>
-          </>
-        )}
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="m-3 bevel-in bg-win-black p-8">
+        <div className="flex flex-col items-center justify-center gap-2 text-center">
+          <p className="font-mono-retro text-sm font-bold uppercase tracking-wide text-win-red">
+            PREDICTION FAILED
+          </p>
+          <p className="max-w-[36ch] font-mono-retro text-2xs text-win-red opacity-90">{error}</p>
+          <p className="max-w-[36ch] font-mono-retro text-2xs text-win-midGray">
+            The next situation change will retry automatically.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="m-3 bevel-in bg-win-black p-8">
+      <div className="flex flex-col items-center justify-center gap-2 text-center">
+        <p className="font-mono-retro text-sm font-bold uppercase tracking-wide text-win-green">
+          READY FOR PREDICTION
+        </p>
+        <p className="max-w-[30ch] font-mono-retro text-2xs text-win-green opacity-70">{message}</p>
+        <span aria-hidden="true" className="blink mt-1 font-mono-retro text-lg text-win-green">
+          _
+        </span>
       </div>
     </div>
   );

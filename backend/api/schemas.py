@@ -35,6 +35,12 @@ class ApiPitchPrediction(BaseModel):
     confidence: float  # 0-1
 
 
+class RankedPitch(BaseModel):
+    pitch_type: PitchType
+    count: int
+    probability: float  # 0-1, count / sample_count
+
+
 class PredictApiRequest(ApiSituation):
     pass
 
@@ -43,6 +49,11 @@ class PredictApiResponse(BaseModel):
     top_prediction: ApiPitchPrediction
     secondary_prediction: ApiPitchPrediction | None
     confidence_pct: float  # 0-100
+    # Full breakdown (up to 5 pitches, sorted by count desc) — top_prediction
+    # and secondary_prediction are ranked_pitches[0]/[1], kept as separate
+    # fields since they were the original response shape and are still the
+    # simplest way to get just the top pick.
+    ranked_pitches: list[RankedPitch]
     category_breakdown: dict[PitchCategory, int]
     sample_count: int  # size of the k=50 candidate pool actually used
     exact_match_count: int  # candidates with distance = 0.0

@@ -10,7 +10,7 @@ import { SessionAccuracy } from "@/components/SessionAccuracy";
 import { PITCHERS, BATTERS } from "@/data/players";
 import { useGameState } from "@/hooks/useGameState";
 import { useSession } from "@/hooks/useSession";
-import { predictNextPitch } from "@/lib/predictionService";
+import { logPitch as logPitchToApi, predictNextPitch } from "@/lib/predictionService";
 import { trueAccuracy, adjustedAccuracy } from "@/lib/pitchCategories";
 import {
   AtBatResult,
@@ -43,6 +43,7 @@ export default function Home() {
 
   const [result, setResult] = useState<PredictionResultType | null>(null);
   const [loading, setLoading] = useState(false);
+  const [predictError, setPredictError] = useState<string | null>(null);
 
   const [pitchThrown, setPitchThrown] = useState<PitchType | null>(null);
   const [pitchResult, setPitchResult] = useState<PitchResultOutcome | null>(null);
@@ -54,9 +55,10 @@ export default function Home() {
   const requestIdRef = useRef(0);
 
   useEffect(() => {
-    if (!session.active || !pitcher || !batter) {
+    if (!session.active || !session.sessionId || !pitcher || !batter) {
       requestIdRef.current += 1;
       setResult(null);
+      setPredictError(null);
       setLoading(false);
       return;
     }
@@ -64,16 +66,22 @@ export default function Home() {
     const requestId = ++requestIdRef.current;
     setLoading(true);
 
-    predictNextPitch({ pitcherId: pitcher.id, batterId: batter.id, gameState })
+    predictNextPitch({ pitcher, batter, gameState, sessionId: session.sessionId })
       .then((prediction) => {
         if (requestId !== requestIdRef.current) return;
         setResult(prediction);
+        setPredictError(null);
+      })
+      .catch((err: unknown) => {
+        if (requestId !== requestIdRef.current) return;
+        setResult(null);
+        setPredictError(err instanceof Error ? err.message : "Prediction request failed.");
       })
       .finally(() => {
         if (requestId !== requestIdRef.current) return;
         setLoading(false);
       });
-  }, [session.active, pitcher, batter, gameState]);
+  }, [session.active, session.sessionId, pitcher, batter, gameState]);
 
   const canLogPitch = pitchResult !== null && atBatResult !== null;
 
@@ -82,7 +90,7 @@ export default function Home() {
 
     // 1) Compare the pitch thrown against the model's top prediction and
     //    2) fold it into the session's running accuracy metrics.
-    if (pitchThrown && result && session.active && pitcher && batter) {
+    if (pitchThrown && result && session.active && session.sessionId && pitcher && batter) {
       logPitch({
         pitcherName: pitcher.name,
         batterName: batter.name,
@@ -94,6 +102,22 @@ export default function Home() {
         adjustedAccuracy: adjustedAccuracy(result.predictedPitch, pitchThrown),
       });
       setPreviousPitch(pitchThrown);
+
+      // Best-effort: tell the backend what was thrown so its session
+      // cache picks it up for live 2x-weighting on the next prediction.
+      // Not awaited — scoring above is already computed locally (same
+      // logic, mirrored server-side), so the UI doesn't wait on this.
+      logPitchToApi({
+        pitcher,
+        batter,
+        gameState,
+        sessionId: session.sessionId,
+        actualPitch: pitchThrown,
+        pitchResult,
+        atBatResult,
+      }).catch((err: unknown) => {
+        console.error("log-pitch API call failed (session log already updated locally):", err);
+      });
     }
 
     // 3) Update the count and outs. An at-bat that's still in progress
@@ -114,10 +138,10 @@ export default function Home() {
     atBatResult,
     result,
     session.active,
+    session.sessionId,
     pitcher,
     batter,
-    gameState.balls,
-    gameState.strikes,
+    gameState,
     logPitch,
     setPreviousPitch,
     applyPitchResult,
@@ -186,7 +210,12 @@ export default function Home() {
 
         {/* RIGHT: prediction + accuracy */}
         <div className="flex flex-col gap-3 lg:sticky lg:top-3">
-          <PredictionResult result={result} loading={loading} emptyMessage={emptyMessage} />
+          <PredictionResult
+            result={result}
+            loading={loading}
+            emptyMessage={emptyMessage}
+            error={predictError}
+          />
           <SessionAccuracy
             active={session.active}
             count={stats.count}
