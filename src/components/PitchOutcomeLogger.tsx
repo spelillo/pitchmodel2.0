@@ -1,7 +1,7 @@
 import { PITCH_TYPES, PitchType } from "@/types";
 
 interface PitchOutcomeLoggerProps {
-  predictedPitch: PitchType;
+  predictedPitch: PitchType | null;
   awaitingLog: boolean;
   loggedActual: PitchType | null;
   onLog: (actual: PitchType) => void;

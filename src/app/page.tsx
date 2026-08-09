@@ -28,6 +28,8 @@ export default function Home() {
     setInning,
     setInningHalf,
     setPreviousPitch,
+    applyPitchResult,
+    applyAtBatResult,
   } = useGameState();
 
   const { session, startSession, endSession, logPitch, stats } = useSession();
@@ -125,6 +127,12 @@ export default function Home() {
             onInningChange={setInning}
             onInningHalfChange={setInningHalf}
             onPreviousPitchChange={setPreviousPitch}
+            predictedPitch={result?.predictedPitch ?? null}
+            awaitingLog={awaitingLog}
+            loggedActual={lastLoggedActual}
+            onLogPitchType={handleLogPitch}
+            onLogPitchResult={applyPitchResult}
+            onLogAtBatResult={applyAtBatResult}
           />
 
           <PredictionButton
@@ -136,13 +144,7 @@ export default function Home() {
 
         {/* RIGHT: prediction + accuracy */}
         <div className="flex flex-col gap-3 lg:sticky lg:top-3">
-          <PredictionResult
-            result={result}
-            loading={loading}
-            awaitingLog={awaitingLog}
-            lastLoggedActual={lastLoggedActual}
-            onLogPitch={handleLogPitch}
-          />
+          <PredictionResult result={result} loading={loading} />
           <SessionAccuracy
             active={session.active}
             count={stats.count}

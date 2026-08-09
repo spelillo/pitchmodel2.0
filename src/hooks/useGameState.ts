@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
-import { GameState } from "@/types";
+import { AtBatResult, GameState, PitchResultOutcome } from "@/types";
+import { AT_BAT_OUT_DELTA } from "@/lib/atBatOutcomes";
 
 export const DEFAULT_GAME_STATE: GameState = {
   balls: 0,
@@ -55,6 +56,48 @@ export function useGameState(initial: GameState = DEFAULT_GAME_STATE) {
     setGameState((prev) => ({ ...prev, balls: 0, strikes: 0 }));
   }, []);
 
+  /** A foul ball behaves like a strike, except it can never be the third —
+   *  with two strikes it just stays foul. */
+  const applyPitchResult = useCallback((outcome: PitchResultOutcome) => {
+    setGameState((prev) => {
+      if (outcome === "Ball") {
+        return { ...prev, balls: Math.min(prev.balls + 1, 3) as GameState["balls"] };
+      }
+      if (outcome === "Strike") {
+        return { ...prev, strikes: Math.min(prev.strikes + 1, 2) as GameState["strikes"] };
+      }
+      if (prev.strikes < 2) {
+        return { ...prev, strikes: (prev.strikes + 1) as GameState["strikes"] };
+      }
+      return prev;
+    });
+  }, []);
+
+  /** Ending an at-bat wipes the count and applies whatever outs the result
+   *  produces. A third out ends the half-inning instead of overflowing. */
+  const applyAtBatResult = useCallback((result: AtBatResult) => {
+    setGameState((prev) => {
+      const rawOuts = prev.outs + AT_BAT_OUT_DELTA[result];
+      if (rawOuts >= 3) {
+        return {
+          ...prev,
+          balls: 0,
+          strikes: 0,
+          outs: 0,
+          runners: { first: false, second: false, third: false },
+          inning: prev.inningHalf === "bottom" ? prev.inning + 1 : prev.inning,
+          inningHalf: prev.inningHalf === "top" ? "bottom" : "top",
+        };
+      }
+      return {
+        ...prev,
+        balls: 0,
+        strikes: 0,
+        outs: rawOuts as GameState["outs"],
+      };
+    });
+  }, []);
+
   return {
     gameState,
     setGameState,
@@ -66,5 +109,7 @@ export function useGameState(initial: GameState = DEFAULT_GAME_STATE) {
     setInningHalf,
     setPreviousPitch,
     resetCount,
+    applyPitchResult,
+    applyAtBatResult,
   };
 }

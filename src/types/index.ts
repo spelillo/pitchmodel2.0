@@ -22,6 +22,29 @@ export const PITCH_TYPES = [
 
 export type PitchType = (typeof PITCH_TYPES)[number];
 
+export const PITCH_RESULTS = ["Ball", "Strike", "Foul Ball"] as const;
+
+export type PitchResultOutcome = (typeof PITCH_RESULTS)[number];
+
+export const AT_BAT_RESULTS = [
+  "Strikeout",
+  "Walk",
+  "Hit By Pitch",
+  "Single",
+  "Double",
+  "Triple",
+  "Home Run",
+  "Groundout",
+  "Flyout",
+  "Popout",
+  "Double Play",
+  "Sac Fly",
+  "Fielder's Choice",
+  "Error",
+] as const;
+
+export type AtBatResult = (typeof AT_BAT_RESULTS)[number];
+
 export interface RunnerState {
   first: boolean;
   second: boolean;

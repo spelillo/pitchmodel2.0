@@ -8,3 +8,4 @@ npm-debug.log*
 .vercel
 next-env.d.ts
 .claude/settings.local.json
+agent-skills-for-context-engineering

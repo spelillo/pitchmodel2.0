@@ -1,24 +1,14 @@
-import { PredictionResult as PredictionResultType, PitchType } from "@/types";
+import { PredictionResult as PredictionResultType } from "@/types";
 import { formatPercent } from "@/lib/format";
 import { ProbabilityList } from "./ProbabilityList";
 import { SimilarSituations } from "./SimilarSituations";
-import { PitchOutcomeLogger } from "./PitchOutcomeLogger";
 
 interface PredictionResultProps {
   result: PredictionResultType | null;
   loading: boolean;
-  awaitingLog: boolean;
-  lastLoggedActual: PitchType | null;
-  onLogPitch: (actual: PitchType) => void;
 }
 
-export function PredictionResult({
-  result,
-  loading,
-  awaitingLog,
-  lastLoggedActual,
-  onLogPitch,
-}: PredictionResultProps) {
+export function PredictionResult({ result, loading }: PredictionResultProps) {
   return (
     <section aria-label="Prediction result" aria-live="polite" className="bevel-out bg-win-face">
       <div
@@ -57,14 +47,6 @@ export function PredictionResult({
               most likely pitch
             </p>
           </div>
-
-          {/* Log actual pitch thrown — the obvious next action */}
-          <PitchOutcomeLogger
-            predictedPitch={result.predictedPitch}
-            awaitingLog={awaitingLog}
-            loggedActual={lastLoggedActual}
-            onLog={onLogPitch}
-          />
 
           {/* Explanation, Notepad-style */}
           <div className="mx-3 mb-3 bevel-in bg-win-paper p-2.5">
