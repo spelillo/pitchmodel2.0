@@ -10,3 +10,6 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 .claude/settings.local.json
 agent-skills-for-context-engineering
+backend/data
+backend/.venv
+__pycache__
