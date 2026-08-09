@@ -2,10 +2,18 @@
 advancement into the two endpoints from the system spec: POST
 /api/v1/predict and POST /api/v1/log-pitch.
 
-Not run yet: the lifespan handler below only opens a DuckDB connection
-when the server actually starts (`uvicorn backend.api.main:app`), and
-this file was built without starting it, so it never touched the
-database while backend/etl's backfill was writing to it.
+Queries the DuckDB file directly per request (see knn.fetch_historical_topk)
+rather than loading the ~2.2M-row table into memory at startup — that
+full load measured ~410MB on its own, too tight for a 512MB instance
+once Python/FastAPI/pandas overhead and a startup working copy are
+added on top. The per-request query approach costs a network hop's
+worth of latency (milliseconds; local benchmark was ~20ms) in exchange
+for a nearly-flat memory footprint regardless of dataset size.
+
+The .duckdb file itself is gitignored (too large/binary for git) and
+Render's Free/Starter tiers have no persistent disk, so on a cold start
+where it's missing, ensure_db_present() downloads it from a GitHub
+Release before the connection below is opened.
 """
 
 from __future__ import annotations
@@ -19,14 +27,15 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from storage.duckdb_adapter import DEFAULT_DB_PATH, TABLE_NAME  # noqa: E402
+from storage.duckdb_adapter import DEFAULT_DB_PATH, TABLE_NAME, ensure_db_present  # noqa: E402
 
 from .game_state import GameSituation, apply_at_bat_result, apply_pitch_result
-from .knn import nearest_neighbors, normalize_runner_columns
+from .knn import combine_with_session, fetch_historical_topk
 from .pitch_types import AT_BAT_STILL_IN_PROGRESS, PITCH_CATEGORY_MAP
 from .schemas import (
     ApiPitchPrediction,
     ApiRunnerState,
+    ApiSituation,
     LogPitchApiRequest,
     LogPitchApiResponse,
     PredictApiRequest,
@@ -34,48 +43,30 @@ from .schemas import (
 )
 from .session_cache import SESSION_STORE, LoggedPitch
 
-HISTORICAL: pd.DataFrame | None = None
+BASE_CON: duckdb.DuckDBPyConnection | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global HISTORICAL
-    con = duckdb.connect(str(DEFAULT_DB_PATH), read_only=True)
-    try:
-        df = con.execute(f"SELECT * FROM {TABLE_NAME}").fetchdf()
-    finally:
-        con.close()
-    HISTORICAL = normalize_runner_columns(df)
-    print(f"Loaded {len(HISTORICAL)} historical pitches into memory")
+    global BASE_CON
+    ensure_db_present(DEFAULT_DB_PATH)
+    BASE_CON = duckdb.connect(str(DEFAULT_DB_PATH), read_only=True)
+    print(f"Connected to {DEFAULT_DB_PATH} (query-per-request, no full table load)")
     yield
+    BASE_CON.close()
 
 
 app = FastAPI(title="PitchModel API", lifespan=lifespan)
 
 
-def _historical_pool(player_name: str, b_hand: str) -> pd.DataFrame:
-    """The spec anchors the KNN engine "strictly by Batter Handedness":
-    same-handedness pitches are a hard filter, not one of the weighted
-    distance terms — a pitcher's approach to lefties and righties is a
-    fundamentally different distribution, not a matter of degree.
-
-    b_hand must already be resolved to "L"/"R" by the caller (switch
-    hitters resolve to the opposite of the pitcher's throwing hand — see
-    handedness.py) — "S" will never match any historical row, since
-    Statcast's `stand` records the batter's actual side per plate
-    appearance and is never literally "S".
-    """
-    if HISTORICAL is None:
-        raise HTTPException(status_code=503, detail="Historical data not loaded yet")
-    subset = HISTORICAL[
-        (HISTORICAL["player_name"] == player_name) & (HISTORICAL["stand"] == b_hand)
-    ]
-    if subset.empty:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No historical pitches for {player_name!r} vs {b_hand}-handed batters",
-        )
-    return subset
+def _candidate_pool(payload: ApiSituation) -> pd.DataFrame:
+    if BASE_CON is None:
+        raise HTTPException(status_code=503, detail="Database not connected yet")
+    historical_topk = fetch_historical_topk(BASE_CON, TABLE_NAME, payload)
+    session_df = SESSION_STORE.pitches_as_dataframe(
+        payload.session_id, player_name=payload.player_name, stand=payload.b_hand
+    )
+    return combine_with_session(historical_topk, payload, session_df)
 
 
 def _build_prediction(pool: pd.DataFrame) -> PredictApiResponse:
@@ -110,21 +101,13 @@ def _build_prediction(pool: pd.DataFrame) -> PredictApiResponse:
 
 @app.post("/api/v1/predict", response_model=PredictApiResponse)
 def predict(payload: PredictApiRequest) -> PredictApiResponse:
-    pitcher_history = _historical_pool(payload.player_name, payload.b_hand)
-    session_df = SESSION_STORE.pitches_as_dataframe(
-        payload.session_id, player_name=payload.player_name, stand=payload.b_hand
-    )
-    pool = nearest_neighbors(pitcher_history, payload, session_df)
+    pool = _candidate_pool(payload)
     return _build_prediction(pool)
 
 
 @app.post("/api/v1/log-pitch", response_model=LogPitchApiResponse)
 def log_pitch(payload: LogPitchApiRequest) -> LogPitchApiResponse:
-    pitcher_history = _historical_pool(payload.player_name, payload.b_hand)
-    session_df = SESSION_STORE.pitches_as_dataframe(
-        payload.session_id, player_name=payload.player_name, stand=payload.b_hand
-    )
-    pool = nearest_neighbors(pitcher_history, payload, session_df)
+    pool = _candidate_pool(payload)
     prediction = _build_prediction(pool)
 
     # Mirrors src/lib/pitchCategories.ts's trueAccuracy/adjustedAccuracy

@@ -5,15 +5,25 @@ Distance formula (lower = more similar), per the system spec:
              + runners_penalty(15.0 if any base occupancy differs)
              + inning_penalty(5.0 if inning+half differs)
 
-Live session pitches get special treatment: any session pitch matching
-the current count/outs/runners exactly is force-set to distance 0.0
-(regardless of inning), and every such exact match is duplicated in the
-candidate pool (2x weight) before combining with the historical pool and
-truncating to the top CANDIDATE_POOL_SIZE.
+The historical baseline (2M+ rows) is queried directly in SQL —
+fetch_historical_topk() pushes the handedness anchor, the distance
+formula, and the top-k selection into DuckDB itself, so the full table
+is never loaded into Python memory. This is what lets the service run
+on a 512MB instance instead of needing >1GB just to hold a static
+dataset in RAM (measured: loading the whole table into a DataFrame
+takes ~410MB on its own, before the rest of the process's overhead).
+
+Live session pitches (a handful per game, already in memory) get
+special treatment: any session pitch matching the current count/
+outs/runners exactly is force-set to distance 0.0 (regardless of
+inning), and every such exact match is duplicated in the candidate
+pool (2x weight) before combining with the historical top-k and
+truncating back to CANDIDATE_POOL_SIZE.
 """
 
 from __future__ import annotations
 
+import duckdb
 import pandas as pd
 
 from .schemas import ApiSituation
@@ -28,18 +38,60 @@ CANDIDATE_POOL_SIZE = 50
 SESSION_EXACT_MATCH_DUPLICATE_FACTOR = 2
 
 
-def normalize_runner_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Raw Statcast on_1b/on_2b/on_3b hold a runner's player id (float)
-    or NaN when the base is empty. Collapse that to plain occupancy
-    booleans once, at the data boundary, so every downstream function
-    (this module, session_cache) can assume on_1b/on_2b/on_3b are bool.
-    A no-op if the columns are already bool (e.g. session pitches).
+def fetch_historical_topk(
+    con: duckdb.DuckDBPyConnection,
+    table_name: str,
+    situation: ApiSituation,
+    k: int = CANDIDATE_POOL_SIZE,
+) -> pd.DataFrame:
+    """The spec anchors the engine "strictly by Batter Handedness":
+    same-handedness pitches are a hard filter (WHERE), not one of the
+    weighted distance terms — a pitcher's approach to lefties and
+    righties is a fundamentally different distribution, not a matter of
+    degree.
+
+    situation.b_hand must already be resolved to "L"/"R" — "S" will
+    never match any historical row, since Statcast's `stand` records
+    the batter's actual side per plate appearance and is never
+    literally "S" (see handedness.py).
+
+    Uses a fresh cursor off the shared connection so concurrent
+    requests don't contend for the same DuckDB connection object.
     """
-    df = df.copy()
-    for col in ("on_1b", "on_2b", "on_3b"):
-        if df[col].dtype != bool:
-            df[col] = df[col].notna()
-    return df
+    query = f"""
+        SELECT *,
+            ABS(balls - $balls) * {BALLS_WEIGHT}
+          + ABS(strikes - $strikes) * {STRIKES_WEIGHT}
+          + ABS(outs_when_up - $outs) * {OUTS_WEIGHT}
+          + CASE WHEN (on_1b IS NOT NULL) = $on1
+                  AND (on_2b IS NOT NULL) = $on2
+                  AND (on_3b IS NOT NULL) = $on3
+                 THEN 0.0 ELSE {RUNNERS_PENALTY} END
+          + CASE WHEN inning = $inning AND inning_topbot = $topbot
+                 THEN 0.0 ELSE {INNING_PENALTY} END
+          AS distance
+        FROM {table_name}
+        WHERE player_name = $player_name AND stand = $stand
+        -- (game_pk, at_bat_number, pitch_number) breaks ties
+        -- deterministically among the many rows that share a distance,
+        -- preferring more recent games first.
+        ORDER BY distance ASC, game_date DESC, game_pk, at_bat_number, pitch_number
+        LIMIT $k
+    """
+    params = {
+        "balls": situation.balls,
+        "strikes": situation.strikes,
+        "outs": situation.outs,
+        "on1": situation.runners.on_1b,
+        "on2": situation.runners.on_2b,
+        "on3": situation.runners.on_3b,
+        "inning": situation.inning,
+        "topbot": situation.inning_topbot,
+        "player_name": situation.player_name,
+        "stand": situation.b_hand,
+        "k": k,
+    }
+    return con.cursor().execute(query, params).fetchdf()
 
 
 def _runners_mismatch(df: pd.DataFrame, situation: ApiSituation) -> pd.Series:
@@ -52,7 +104,13 @@ def _runners_mismatch(df: pd.DataFrame, situation: ApiSituation) -> pd.Series:
 
 
 def compute_distances(df: pd.DataFrame, situation: ApiSituation) -> pd.Series:
-    """Vectorized distance formula, one row -> one distance value."""
+    """Vectorized distance formula for an in-memory DataFrame — used
+    for the live session pool (a handful of rows, already loaded).
+    The historical baseline uses fetch_historical_topk() instead; this
+    exists separately because session pitches already store
+    on_1b/on_2b/on_3b as plain booleans (see session_cache.LoggedPitch),
+    so there's no SQL round-trip worth making for a handful of rows.
+    """
     outs_col = df["outs_when_up"] if "outs_when_up" in df.columns else df["outs"]
 
     balls_penalty = (df["balls"] - situation.balls).abs() * BALLS_WEIGHT
@@ -96,27 +154,19 @@ def _session_pool(session_pitches: pd.DataFrame, situation: ApiSituation) -> pd.
     return pool
 
 
-def nearest_neighbors(
-    historical: pd.DataFrame,
+def combine_with_session(
+    historical_topk: pd.DataFrame,
     situation: ApiSituation,
     session_pitches: pd.DataFrame | None = None,
     k: int = CANDIDATE_POOL_SIZE,
 ) -> pd.DataFrame:
-    """Return the k nearest pitches to `situation` across the historical
-    baseline plus the live session store, sorted by ascending distance.
-
-    Only ever materializes the historical baseline's own top-k rows, not
-    a copy of what may be a multi-million-row DataFrame — a row outside
-    that top-k can never outrank one already inside it, so folding in the
-    (typically tiny) session pool and re-ranking the union is exactly
-    equivalent to scoring everything in one pass.
+    """Fold the (already top-k, already-scored) historical pool
+    together with the live session pool and re-rank. Combining a top-k
+    slice with a small session pool and re-truncating to k is exactly
+    equivalent to scoring everything in one pass — a historical row
+    outside the top-k can never outrank one already inside it.
     """
-    hist_distances = compute_distances(historical, situation)
-    top_idx = hist_distances.nsmallest(k).index
-    hist_pool = historical.loc[top_idx].copy()
-    hist_pool["distance"] = hist_distances.loc[top_idx]
-
-    frames = [hist_pool]
+    frames = [historical_topk]
     if session_pitches is not None and not session_pitches.empty:
         frames.append(_session_pool(session_pitches, situation))
 
