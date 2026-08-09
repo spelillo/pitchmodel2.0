@@ -17,6 +17,9 @@ class ApiRunnerState(BaseModel):
 
 class ApiSituation(BaseModel):
     player_name: str
+    # Must already be resolved to "L"/"R" by the caller — a switch
+    # hitter ("S") has no fixed side, it depends on which pitcher they're
+    # facing. See handedness.py's resolve_batter_handedness().
     b_hand: Handedness
     balls: Literal[0, 1, 2, 3]
     strikes: Literal[0, 1, 2]

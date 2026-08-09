@@ -53,12 +53,28 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="PitchModel API", lifespan=lifespan)
 
 
-def _pitcher_history(player_name: str) -> pd.DataFrame:
+def _historical_pool(player_name: str, b_hand: str) -> pd.DataFrame:
+    """The spec anchors the KNN engine "strictly by Batter Handedness":
+    same-handedness pitches are a hard filter, not one of the weighted
+    distance terms — a pitcher's approach to lefties and righties is a
+    fundamentally different distribution, not a matter of degree.
+
+    b_hand must already be resolved to "L"/"R" by the caller (switch
+    hitters resolve to the opposite of the pitcher's throwing hand — see
+    handedness.py) — "S" will never match any historical row, since
+    Statcast's `stand` records the batter's actual side per plate
+    appearance and is never literally "S".
+    """
     if HISTORICAL is None:
         raise HTTPException(status_code=503, detail="Historical data not loaded yet")
-    subset = HISTORICAL[HISTORICAL["player_name"] == player_name]
+    subset = HISTORICAL[
+        (HISTORICAL["player_name"] == player_name) & (HISTORICAL["stand"] == b_hand)
+    ]
     if subset.empty:
-        raise HTTPException(status_code=404, detail=f"No historical pitches for {player_name!r}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"No historical pitches for {player_name!r} vs {b_hand}-handed batters",
+        )
     return subset
 
 
@@ -94,16 +110,20 @@ def _build_prediction(pool: pd.DataFrame) -> PredictApiResponse:
 
 @app.post("/api/v1/predict", response_model=PredictApiResponse)
 def predict(payload: PredictApiRequest) -> PredictApiResponse:
-    pitcher_history = _pitcher_history(payload.player_name)
-    session_df = SESSION_STORE.pitches_as_dataframe(payload.session_id)
+    pitcher_history = _historical_pool(payload.player_name, payload.b_hand)
+    session_df = SESSION_STORE.pitches_as_dataframe(
+        payload.session_id, player_name=payload.player_name, stand=payload.b_hand
+    )
     pool = nearest_neighbors(pitcher_history, payload, session_df)
     return _build_prediction(pool)
 
 
 @app.post("/api/v1/log-pitch", response_model=LogPitchApiResponse)
 def log_pitch(payload: LogPitchApiRequest) -> LogPitchApiResponse:
-    pitcher_history = _pitcher_history(payload.player_name)
-    session_df = SESSION_STORE.pitches_as_dataframe(payload.session_id)
+    pitcher_history = _historical_pool(payload.player_name, payload.b_hand)
+    session_df = SESSION_STORE.pitches_as_dataframe(
+        payload.session_id, player_name=payload.player_name, stand=payload.b_hand
+    )
     pool = nearest_neighbors(pitcher_history, payload, session_df)
     prediction = _build_prediction(pool)
 
@@ -122,6 +142,8 @@ def log_pitch(payload: LogPitchApiRequest) -> LogPitchApiResponse:
     session_state = SESSION_STORE.add_pitch(
         payload.session_id,
         LoggedPitch(
+            player_name=payload.player_name,
+            stand=payload.b_hand,
             balls=payload.balls,
             strikes=payload.strikes,
             outs_when_up=payload.outs,

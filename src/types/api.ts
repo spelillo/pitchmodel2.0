@@ -29,6 +29,9 @@ export interface ApiRunnerState {
 /** Shared situational payload used by both endpoints below. */
 export interface ApiSituation {
   player_name: string;
+  // Must already be resolved to "L"/"R" by the caller — a switch hitter
+  // ("S") has no fixed side, it depends on which pitcher they're facing.
+  // See @/lib/handedness's resolveBatterHandedness().
   b_hand: Handedness;
   balls: 0 | 1 | 2 | 3;
   strikes: 0 | 1 | 2;

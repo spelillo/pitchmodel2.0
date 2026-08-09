@@ -18,6 +18,8 @@ import pandas as pd
 
 @dataclass
 class LoggedPitch:
+    player_name: str
+    stand: str  # "L" | "R" — already resolved, never "S"
     balls: int
     strikes: int
     outs_when_up: int
@@ -60,11 +62,23 @@ class SessionStore:
         state.pitches.append(pitch)
         return state
 
-    def pitches_as_dataframe(self, session_id: str) -> pd.DataFrame:
+    def pitches_as_dataframe(
+        self, session_id: str, *, player_name: str | None = None, stand: str | None = None
+    ) -> pd.DataFrame:
+        """Session pitches for the given matchup. A session can span
+        multiple pitcher/batter matchups over a game, so callers must
+        scope to the current one — otherwise a pitch logged against a
+        different pitcher (or the opposite-handed batter) would
+        incorrectly count as a live match for this prediction."""
         state = self._sessions.get(session_id)
         if not state or not state.pitches:
             return pd.DataFrame()
-        return pd.DataFrame([vars(p) for p in state.pitches])
+        df = pd.DataFrame([vars(p) for p in state.pitches])
+        if player_name is not None:
+            df = df[df["player_name"] == player_name]
+        if stand is not None:
+            df = df[df["stand"] == stand]
+        return df
 
     def clear(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
