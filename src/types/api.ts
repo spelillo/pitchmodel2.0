@@ -35,6 +35,7 @@ export interface ApiSituation {
   outs: 0 | 1 | 2;
   runners: ApiRunnerState;
   inning: number;
+  inning_topbot: "Top" | "Bot"; // matches raw Statcast values; needed by the inning-penalty term
   session_id: string;
 }
 
@@ -72,8 +73,11 @@ export interface LogPitchApiResponse {
   session_adjusted_accuracy: number;
   // Game state the server advanced to after applying pitch_result /
   // at_bat_result, echoed back so the client can sync without drifting.
+  // inning/inning_topbot only change on a third-out half-inning rollover.
   balls: 0 | 1 | 2 | 3;
   strikes: 0 | 1 | 2;
   outs: 0 | 1 | 2;
   runners: ApiRunnerState;
+  inning: number;
+  inning_topbot: "Top" | "Bot";
 }
