@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 from pathlib import Path
 
 import duckdb
@@ -33,7 +34,12 @@ from storage.duckdb_adapter import DEFAULT_DB_PATH, TABLE_NAME  # noqa: E402
 MLB_STATS_API = "https://statsapi.mlb.com/api/v1"
 OUTPUT_PATH = Path(__file__).resolve().parent.parent.parent / "src" / "data" / "players.ts"
 
-DEFAULT_SEASON = 2025
+# Computed, not hardcoded: an MLB season's calendar year always matches
+# its season year (unlike e.g. the NFL), so "today's year" is always the
+# right default. A hardcoded literal here is exactly what caused rookies
+# like Andrew Painter (debuted 2026-03-31) to be silently excluded from
+# the roster — the 2025 MLB Stats API roster pull doesn't know he exists.
+DEFAULT_SEASON = date.today().year
 DEFAULT_MIN_PITCHES = 100
 
 

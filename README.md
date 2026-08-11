@@ -55,6 +55,13 @@ needs to change.
 `src/data/players.ts` similarly isolates the mock roster. Swap it for a real
 roster/Statcast-backed fetch later.
 
+## Backend & data pipeline
+
+The real roster (`src/data/players.ts`) and prediction data are generated
+by the ETL pipeline in `backend/`, which also keeps itself current on a
+schedule. See [`backend/README.md`](backend/README.md) for how the
+pitch/roster data is fetched, kept fresh, tested, and republished.
+
 ## Project structure
 
 ```

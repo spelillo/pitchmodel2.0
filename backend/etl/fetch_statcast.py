@@ -1,24 +1,24 @@
-"""Pull a sample of Statcast pitch-by-pitch data via pybaseball and
-validate it against the fields PitchModel's prediction engine needs.
+"""Pull Statcast pitch-by-pitch data via pybaseball, validate it against
+the fields PitchModel's prediction engine needs, and optionally load it
+into backend/data/pitchmodel.duckdb.
 
-This is a sanity-check pull for a short date range — NOT the full 3-year
-historical backfill described in the system spec. It exists to confirm
-column names, null rates, and pitch_name coverage before anything commits
-to a storage adapter or a scheduled weekly sync.
+Two ways to pick a date range:
+  - Explicit --start/--end: a one-off backfill (initial load, or filling
+    a specific gap).
+  - --since-last: for routine syncs. Reads the latest game_date already
+    in the target duckdb and resumes the day after it, so nobody has to
+    hand-pick (and remember to update) a date range. This is what
+    .github/workflows/sync-statcast.yml runs on a schedule.
 
-Scaling this up later:
-  - Full historical backfill: use fetch_range_chunked() (Statcast pulls
-    get slow/unreliable over very wide ranges) — it splits into
-    --chunk-days windows, pauses briefly between requests, and
-    concatenates. REQUIRED_COLUMNS/validate() stay the same either way.
-  - Weekly GitHub Action sync: reuse fetch() with --start/--end set to
-    "since last run", then append (not overwrite) into the storage
-    adapter instead of writing a local CSV.
+Wide ranges go through fetch_range_chunked() (Statcast pulls get
+slow/unreliable over very wide ranges) — it splits into --chunk-days
+windows, pauses briefly between requests, and concatenates.
 
 Usage:
     python backend/etl/fetch_statcast.py
     python backend/etl/fetch_statcast.py --start 2025-06-01 --end 2025-06-03
-    python backend/etl/fetch_statcast.py --start 2023-04-01 --end 2025-10-01 --chunk-days 3
+    python backend/etl/fetch_statcast.py --start 2023-04-01 --end 2025-10-01 --chunk-days 3 --load-duckdb
+    python backend/etl/fetch_statcast.py --since-last --end 2026-08-09 --load-duckdb
 """
 
 from __future__ import annotations
@@ -36,6 +36,13 @@ from pybaseball import statcast
 # run directly (`python backend/etl/fetch_statcast.py`) rather than as
 # part of an installed package.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Duplicated from storage.duckdb_adapter.DEFAULT_DB_PATH (same value)
+# rather than imported, so that module — and its unconditional `import
+# duckdb` — only loads lazily, inside the code paths that actually touch
+# the database (--load-duckdb, --since-last). Everyone else, and the
+# --db-path default below, doesn't need duckdb installed at all.
+DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "data" / "pitchmodel.duckdb"
 
 # Columns the prediction engine's situational model and pitch-type target
 # need. Cross-referenced against the system spec's "Extraction Fields"
@@ -75,6 +82,46 @@ PAUSE_BETWEEN_CHUNKS_SEC = 2
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "data" / "samples"
 
 
+def compute_since_last(db_path: Path = DEFAULT_DB_PATH) -> str:
+    """The day after the latest game_date already loaded into db_path.
+
+    Lets the weekly sync always pick up exactly where the last run left
+    off, instead of a hand-picked --start that has to be remembered and
+    updates the moment someone forgets it (the exact bug that let a
+    ~4-month hole open up in the 2026 backfill).
+    """
+    import duckdb
+
+    from storage.duckdb_adapter import TABLE_NAME
+
+    if not db_path.exists():
+        raise SystemExit(
+            f"--since-last requires an existing database at {db_path} to read the "
+            "last-loaded date from — run an initial backfill with an explicit "
+            "--start/--end first."
+        )
+    con = duckdb.connect(str(db_path), read_only=True)
+    try:
+        tables = con.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_name = ?",
+            [TABLE_NAME],
+        ).fetchall()
+        if not tables:
+            raise SystemExit(
+                f"--since-last requires {db_path} to already contain the "
+                f"'{TABLE_NAME}' table — run an initial backfill first."
+            )
+        (max_date,) = con.execute(f"SELECT max(game_date) FROM {TABLE_NAME}").fetchone()
+    finally:
+        con.close()
+
+    if max_date is None:
+        raise SystemExit(f"{TABLE_NAME} in {db_path} is empty — run an initial backfill first.")
+
+    next_date = max_date + timedelta(days=1)
+    return next_date.isoformat()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     today = date.today()
@@ -82,6 +129,14 @@ def parse_args() -> argparse.Namespace:
     default_start = default_end - timedelta(days=DEFAULT_SAMPLE_DAYS - 1)
     parser.add_argument("--start", default=default_start.isoformat(), help="YYYY-MM-DD")
     parser.add_argument("--end", default=default_end.isoformat(), help="YYYY-MM-DD")
+    parser.add_argument(
+        "--since-last",
+        action="store_true",
+        help=(
+            "ignore --start and instead resume the day after the latest game_date "
+            "already loaded into the target database (see --load-duckdb / db-path)"
+        ),
+    )
     parser.add_argument(
         "--chunk-days",
         type=int,
@@ -93,7 +148,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="also upsert the pulled rows into backend/data/pitchmodel.duckdb",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--db-path",
+        type=Path,
+        default=DEFAULT_DB_PATH,
+        help="duckdb file to read/write (default: %(default)s)",
+    )
+    args = parser.parse_args()
+    if args.since_last:
+        args.start = compute_since_last(args.db_path)
+    return args
 
 
 def fetch(start: str, end: str) -> pd.DataFrame:
@@ -177,7 +241,7 @@ def main() -> None:
         # who only want the CSV sanity-check path.
         from storage.duckdb_adapter import load
 
-        inserted = load(df[REQUIRED_COLUMNS])
+        inserted = load(df[REQUIRED_COLUMNS], db_path=args.db_path)
         print(f"Upserted into DuckDB: {inserted} new row(s) (duplicates skipped)")
 
 
