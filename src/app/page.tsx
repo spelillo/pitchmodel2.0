@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { AboutPage } from "@/components/AboutPage";
 import { SessionBar } from "@/components/SessionBar";
@@ -8,20 +8,13 @@ import { PlayerSelector } from "@/components/PlayerSelector";
 import { GameSituation } from "@/components/GameSituation";
 import { PredictionResult } from "@/components/PredictionResult";
 import { SessionAccuracy } from "@/components/SessionAccuracy";
+import { LogPitchButton } from "@/components/LogPitchButton";
 import { PITCHERS, BATTERS } from "@/data/players";
 import { useGameState } from "@/hooks/useGameState";
 import { useSession } from "@/hooks/useSession";
-import { logPitch as logPitchToApi, predictNextPitch } from "@/lib/predictionService";
-import { trueAccuracy, adjustedAccuracy } from "@/lib/pitchCategories";
-import {
-  AtBatResult,
-  Player,
-  PredictionResult as PredictionResultType,
-  PitchResultOutcome,
-  PitchType,
-} from "@/types";
-
-const AT_BAT_STILL_IN_PROGRESS: AtBatResult = "At Bat Still In Progress";
+import { usePitchLogging } from "@/hooks/usePitchLogging";
+import { predictNextPitch } from "@/lib/predictionService";
+import { Player, PredictionResult as PredictionResultType } from "@/types";
 
 export default function Home() {
   const [view, setView] = useState<"home" | "about">("home");
@@ -47,9 +40,27 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [predictError, setPredictError] = useState<string | null>(null);
 
-  const [pitchThrown, setPitchThrown] = useState<PitchType | null>(null);
-  const [pitchResult, setPitchResult] = useState<PitchResultOutcome | null>(null);
-  const [atBatResult, setAtBatResult] = useState<AtBatResult | null>(null);
+  const {
+    pitchThrown,
+    setPitchThrown,
+    pitchResult,
+    handlePitchResultChange,
+    atBatResult,
+    setAtBatResult,
+    canLogPitch,
+    handleLogPitch,
+  } = usePitchLogging({
+    pitcher,
+    batter,
+    gameState,
+    predictionResult: result,
+    sessionActive: session.active,
+    sessionId: session.sessionId,
+    logSessionPitch: logPitch,
+    setPreviousPitch,
+    applyPitchResult,
+    applyAtBatResult,
+  });
 
   // Live prediction engine: re-runs automatically whenever the situation
   // changes, as long as a session is active. A request id guards against a
@@ -84,71 +95,6 @@ export default function Home() {
         setLoading(false);
       });
   }, [session.active, session.sessionId, pitcher, batter, gameState]);
-
-  const canLogPitch = pitchResult !== null && atBatResult !== null;
-
-  const handleLogPitch = useCallback(() => {
-    if (!pitchResult || !atBatResult) return;
-
-    // 1) Compare the pitch thrown against the model's top prediction and
-    //    2) fold it into the session's running accuracy metrics.
-    if (pitchThrown && result && session.active && session.sessionId && pitcher && batter) {
-      logPitch({
-        pitcherName: pitcher.name,
-        batterName: batter.name,
-        count: `${gameState.balls}-${gameState.strikes}`,
-        predictedPitch: result.predictedPitch,
-        predictedProbability: result.probability,
-        actualPitch: pitchThrown,
-        trueAccuracy: trueAccuracy(result.predictedPitch, pitchThrown),
-        adjustedAccuracy: adjustedAccuracy(result.predictedPitch, pitchThrown),
-      });
-      setPreviousPitch(pitchThrown);
-
-      // Best-effort: tell the backend what was thrown so its session
-      // cache picks it up for live 2x-weighting on the next prediction.
-      // Not awaited — scoring above is already computed locally (same
-      // logic, mirrored server-side), so the UI doesn't wait on this.
-      logPitchToApi({
-        pitcher,
-        batter,
-        gameState,
-        sessionId: session.sessionId,
-        actualPitch: pitchThrown,
-        pitchResult,
-        atBatResult,
-      }).catch((err: unknown) => {
-        console.error("log-pitch API call failed (session log already updated locally):", err);
-      });
-    }
-
-    // 3) Update the count and outs. An at-bat that's still in progress
-    //    only advances the count; anything terminal resets the count and
-    //    lets the outcome adjust outs (and roll the half-inning on out 3).
-    if (atBatResult === AT_BAT_STILL_IN_PROGRESS) {
-      applyPitchResult(pitchResult);
-    } else {
-      applyAtBatResult(atBatResult);
-    }
-
-    setPitchThrown(null);
-    setPitchResult(null);
-    setAtBatResult(null);
-  }, [
-    pitchThrown,
-    pitchResult,
-    atBatResult,
-    result,
-    session.active,
-    session.sessionId,
-    pitcher,
-    batter,
-    gameState,
-    logPitch,
-    setPreviousPitch,
-    applyPitchResult,
-    applyAtBatResult,
-  ]);
 
   const emptyMessage = !session.active
     ? "Start a session to see live predictions."
@@ -205,15 +151,15 @@ export default function Home() {
             pitchThrown={pitchThrown}
             onPitchThrownChange={setPitchThrown}
             pitchResult={pitchResult}
-            onPitchResultChange={setPitchResult}
+            onPitchResultChange={handlePitchResultChange}
             atBatResult={atBatResult}
             onAtBatResultChange={setAtBatResult}
-            canLogPitch={canLogPitch}
-            onLogPitch={handleLogPitch}
           />
         </div>
 
-        {/* RIGHT: prediction + accuracy */}
+        {/* RIGHT: prediction + accuracy — sticky, so this stays in view
+            (including the Log Pitch button) no matter how far the left
+            column's game-situation form scrolls. */}
         <div className="flex flex-col gap-3 lg:sticky lg:top-3">
           <PredictionResult
             result={result}
@@ -228,6 +174,7 @@ export default function Home() {
             adjustedAccuracyValue={stats.adjustedAccuracy}
             log={session.log}
           />
+          <LogPitchButton disabled={!canLogPitch} onClick={handleLogPitch} />
         </div>
       </main>
       )}

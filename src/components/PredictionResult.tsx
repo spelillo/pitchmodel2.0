@@ -1,7 +1,6 @@
 import { PredictionResult as PredictionResultType } from "@/types";
 import { formatPercent } from "@/lib/format";
 import { ProbabilityList } from "./ProbabilityList";
-import { SimilarSituations } from "./SimilarSituations";
 
 interface PredictionResultProps {
   result: PredictionResultType | null;
@@ -66,13 +65,6 @@ export function PredictionResult({ result, loading, emptyMessage, error }: Predi
 
           <div className="mx-3 mb-3">
             <ProbabilityList probabilities={result.probabilities} />
-          </div>
-
-          <div className="mx-3 mb-3">
-            <SimilarSituations
-              total={result.similarSituationTotal}
-              breakdown={result.similarSituationBreakdown}
-            />
           </div>
         </div>
       )}

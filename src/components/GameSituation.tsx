@@ -6,7 +6,6 @@ import { InningControl } from "./InningControl";
 import { PitchThrownSelector } from "./PitchThrownSelector";
 import { PitchResultLogger } from "./PitchResultLogger";
 import { AtBatResultLogger } from "./AtBatResultLogger";
-import { LogPitchButton } from "./LogPitchButton";
 
 const BALLS_VALUES = [0, 1, 2, 3] as const;
 const STRIKES_VALUES = [0, 1, 2] as const;
@@ -26,8 +25,6 @@ interface GameSituationProps {
   onPitchResultChange: (outcome: PitchResultOutcome) => void;
   atBatResult: AtBatResult | null;
   onAtBatResultChange: (result: AtBatResult) => void;
-  canLogPitch: boolean;
-  onLogPitch: () => void;
 }
 
 export function GameSituation({
@@ -45,8 +42,6 @@ export function GameSituation({
   onPitchResultChange,
   atBatResult,
   onAtBatResultChange,
-  canLogPitch,
-  onLogPitch,
 }: GameSituationProps) {
   return (
     <section aria-label="Game situation" className="bevel-out bg-win-face">
@@ -107,8 +102,6 @@ export function GameSituation({
           onSelect={onAtBatResultChange}
           disabled={pitchResult === null}
         />
-
-        <LogPitchButton disabled={!canLogPitch} onClick={onLogPitch} />
       </div>
     </section>
   );

@@ -1,6 +1,11 @@
 import { LoggedPitch } from "@/types";
 import { formatPercent } from "@/lib/format";
 
+// The accuracy percentages below always reflect the whole session (see
+// useSession's `stats`) — this only caps how many *rows* of the log are
+// rendered, so a long session doesn't grow this card without bound.
+const MAX_VISIBLE_LOG_ROWS = 10;
+
 interface SessionAccuracyProps {
   active: boolean;
   count: number;
@@ -16,6 +21,7 @@ export function SessionAccuracy({
   adjustedAccuracyValue,
   log,
 }: SessionAccuracyProps) {
+  const visibleLog = log.slice(0, MAX_VISIBLE_LOG_ROWS);
   return (
     <section aria-label="Session accuracy" className="bevel-out bg-win-face">
       <div
@@ -42,9 +48,10 @@ export function SessionAccuracy({
             </div>
             <p className="mt-2 font-mono-retro text-2xs text-win-midGray">
               based on {count} logged {count === 1 ? "pitch" : "pitches"}
+              {count > MAX_VISIBLE_LOG_ROWS && ` (${MAX_VISIBLE_LOG_ROWS} most recent shown)`}
             </p>
 
-            <div className="mt-3 bevel-in max-h-64 overflow-y-auto bg-win-white no-scrollbar">
+            <div className="mt-3 max-h-64 overflow-y-auto bevel-in bg-win-white">
               <table className="w-full border-collapse text-left">
                 <thead>
                   <tr className="border-b-2 border-win-midGray bg-win-face">
@@ -56,7 +63,7 @@ export function SessionAccuracy({
                   </tr>
                 </thead>
                 <tbody>
-                  {log.map((entry, index) => (
+                  {visibleLog.map((entry, index) => (
                     <tr
                       key={entry.id}
                       className={`border-b border-win-lightGray ${
