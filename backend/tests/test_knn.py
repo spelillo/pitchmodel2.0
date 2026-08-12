@@ -1,6 +1,8 @@
-"""Tests for backend/api/knn.py's matchup-identity and count-fallback
-hierarchy: head-to-head history vs. pitcher-vs-hand cohort (step 1),
-and exact count vs. ahead/even/behind bucket (step 2).
+"""Tests for backend/api/knn.py's matchup-identity and count/tier
+widening cascade: head-to-head history vs. pitcher-vs-hand cohort
+(step 1), and the exact/bucket/any-count -> hand_cohort widening ladder
+that guarantees at least MIN_CANDIDATE_SAMPLE historical pitches
+(step 2).
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ import pandas as pd
 import pytest
 
 from backend.api.knn import (
-    MIN_EXACT_COUNT_PITCHES,
+    MIN_CANDIDATE_SAMPLE,
     MIN_HEAD_TO_HEAD_PITCHES,
     count_bucket,
     fetch_historical_topk,
@@ -123,7 +125,7 @@ def test_falls_back_to_hand_cohort_when_head_to_head_too_thin(tmp_path):
     )
     # Padding so the hand-cohort pool itself isn't empty (a different
     # batter, same hand, same pitcher).
-    cohort_padding = _rows(20, batter=OTHER_BATTER_ID, start_at_bat=1000)
+    cohort_padding = _rows(30, batter=OTHER_BATTER_ID, start_at_bat=1000)
     con = _connect(tmp_path, pd.concat([below_threshold, cohort_padding], ignore_index=True))
 
     identity = resolve_matchup_identity(con, "statcast_pitches", _situation())
@@ -132,38 +134,76 @@ def test_falls_back_to_hand_cohort_when_head_to_head_too_thin(tmp_path):
     assert identity.params == {"player_name": "Painter, Andrew", "b_hand": "R"}
 
 
-def test_uses_exact_count_when_sample_is_large_enough(tmp_path):
-    assert MIN_EXACT_COUNT_PITCHES == 8
-    exact = _rows(MIN_EXACT_COUNT_PITCHES, balls=0, strikes=0, start_at_bat=1)
-    same_bucket_different_count = _rows(20, balls=1, strikes=1, start_at_bat=1000)
-    con = _connect(
-        tmp_path, pd.concat([exact, same_bucket_different_count], ignore_index=True)
-    )
+def test_uses_exact_count_when_pool_already_clears_the_floor(tmp_path, capsys):
+    assert MIN_CANDIDATE_SAMPLE == 25
+    exact = _rows(MIN_CANDIDATE_SAMPLE, balls=0, strikes=0, start_at_bat=1)
+    other_bucket_noise = _rows(20, balls=0, strikes=1, start_at_bat=1000)
+    con = _connect(tmp_path, pd.concat([exact, other_bucket_noise], ignore_index=True))
 
-    df, identity = fetch_historical_topk(con, "statcast_pitches", _situation())
+    df, tier = fetch_historical_topk(con, "statcast_pitches", _situation())
 
-    assert identity.tier == "batter"
-    assert len(df) == MIN_EXACT_COUNT_PITCHES
+    assert tier.tier == "batter"
+    assert len(df) == MIN_CANDIDATE_SAMPLE
     assert (df["balls"] == 0).all() and (df["strikes"] == 0).all()
+    assert "widened" not in capsys.readouterr().out
 
 
-def test_falls_back_to_count_bucket_when_exact_count_too_thin(tmp_path, capsys):
-    thin_exact = _rows(
-        MIN_EXACT_COUNT_PITCHES - 1, balls=0, strikes=0, start_at_bat=1
-    )
-    # 1-1 is also "even" per count_bucket, so it should be pulled in.
-    same_bucket = _rows(20, balls=1, strikes=1, start_at_bat=1000)
+def test_widens_to_bucket_when_exact_count_is_too_thin(tmp_path, capsys):
+    thin_exact = _rows(5, balls=0, strikes=0, start_at_bat=1)
+    # 1-1 is also "even" per count_bucket, so it should be pulled in to
+    # clear the floor.
+    same_bucket = _rows(25, balls=1, strikes=1, start_at_bat=1000)
     # 0-1 is "ahead", a different bucket — must NOT be pulled in.
-    different_bucket = _rows(20, balls=0, strikes=1, start_at_bat=5000)
+    different_bucket = _rows(30, balls=0, strikes=1, start_at_bat=5000)
     con = _connect(
         tmp_path,
         pd.concat([thin_exact, same_bucket, different_bucket], ignore_index=True),
     )
 
-    df, identity = fetch_historical_topk(con, "statcast_pitches", _situation(balls=0, strikes=0))
+    df, tier = fetch_historical_topk(con, "statcast_pitches", _situation(balls=0, strikes=0))
 
-    assert identity.tier == "batter"
-    assert len(df) > MIN_EXACT_COUNT_PITCHES - 1  # bucket rows were pulled in
+    assert tier.tier == "batter"
+    assert len(df) == 30  # 5 exact + 25 same-bucket, none from the other bucket
     for _, row in df.iterrows():
         assert count_bucket(row["balls"], row["strikes"]) == "even"
-    assert "count fallback" in capsys.readouterr().out
+    assert "widened filters" in capsys.readouterr().out
+
+
+def test_widens_to_any_count_when_even_the_bucket_is_too_thin(tmp_path, capsys):
+    # Total batter-tier pitches (28) clear MIN_HEAD_TO_HEAD_PITCHES and
+    # MIN_CANDIDATE_SAMPLE, but no single count bucket does on its own
+    # (each is only 7 or 14).
+    even_bucket = _rows(7, balls=0, strikes=0, start_at_bat=1)
+    ahead_bucket = _rows(7, balls=0, strikes=1, start_at_bat=100)
+    behind_bucket = _rows(7, balls=1, strikes=0, start_at_bat=200)
+    more_even = _rows(7, balls=1, strikes=1, start_at_bat=300)
+    con = _connect(
+        tmp_path,
+        pd.concat([even_bucket, ahead_bucket, behind_bucket, more_even], ignore_index=True),
+    )
+
+    df, tier = fetch_historical_topk(con, "statcast_pitches", _situation(balls=0, strikes=0))
+
+    assert tier.tier == "batter"
+    assert len(df) == 28  # all four counts pulled in — "any_count" level
+    out = capsys.readouterr().out
+    assert "any_count" in out
+
+
+def test_falls_through_to_hand_cohort_when_batter_tier_never_clears_floor(tmp_path, capsys):
+    # Batter-tier total (any count) clears MIN_HEAD_TO_HEAD_PITCHES but
+    # not MIN_CANDIDATE_SAMPLE, so it must fall through to the
+    # hand-cohort tier — which, since it filters only by player_name/
+    # stand (not batter), naturally includes these same 15 rows too,
+    # plus another batter's padding, once widened.
+    thin_batter_tier = _rows(15, batter=BATTER_ID, balls=0, strikes=0, start_at_bat=1)
+    cohort_padding = _rows(15, batter=OTHER_BATTER_ID, balls=0, strikes=0, start_at_bat=1000)
+    con = _connect(
+        tmp_path, pd.concat([thin_batter_tier, cohort_padding], ignore_index=True)
+    )
+
+    df, tier = fetch_historical_topk(con, "statcast_pitches", _situation(balls=0, strikes=0))
+
+    assert tier.tier == "hand_cohort"
+    assert len(df) == 30
+    assert "widened filters" in capsys.readouterr().out

@@ -7,17 +7,25 @@ ever sees a row:
    pitcher/batter's own head-to-head history; fall back to the
    pitcher-vs-batter-hand cohort when they haven't faced each other
    enough times for a reliable neighbor set.
-2. Count (fetch_historical_topk): prefer the exact (balls, strikes)
-   count within the resolved matchup pool; fall back to the broader
-   ahead/even/behind bucket (count_bucket) when even the exact count is
-   too thin. This is meant to be a rare, logged event — not a routine
-   step in the cascade.
+2. Count + tier widening (_resolve_pool_filters): a prediction should
+   never be based on a handful of pitches, so the count filter — and,
+   if needed, the matchup tier itself — widens step by step until the
+   pool reaches MIN_CANDIDATE_SAMPLE:
+       (resolved tier, exact count)
+       -> (resolved tier, count bucket)
+       -> (resolved tier, any count)
+       -> (hand_cohort tier, exact count)          [only if step 1 chose "batter"]
+       -> (hand_cohort tier, count bucket)
+       -> (hand_cohort tier, any count)
+   Each widening step is logged — meant to be visible when it happens,
+   not silent, even though the last ("hand_cohort, any count") step
+   should in practice always clear the floor on its own.
 
 Distance formula (lower = more similar), applied to whatever pool step
 1+2 leaves — count no longer appears here since it's a hard filter
 above, though the balls/strikes terms still do useful ranking work
-within a bucket-fallback pool (preferring rows closer to the actual
-count even when the bucket had to be widened):
+within a widened pool (preferring rows closer to the actual count even
+when the filter had to loosen):
     distance = |Δballs| × 5.83 + |Δstrikes| × 8.75 + |Δouts| × 5.0
              + runners_penalty(15.0 if any base occupancy differs)
              + inning_penalty(5.0 if inning+half differs)
@@ -58,17 +66,17 @@ CANDIDATE_POOL_SIZE = 50
 SESSION_EXACT_MATCH_DUPLICATE_FACTOR = 2
 
 # Step 1: below this many head-to-head pitches, a specific batter's
-# history is too thin to trust — fall back to the pitcher-vs-hand
-# cohort instead. The cohort itself has no separate threshold: a
-# pitcher with any MLB track record will trivially clear this many
-# pitches against both lefties and righties, so there's no realistic
-# case where the cohort itself needs a further fallback.
+# history is too thin to trust at all — fall back to the pitcher-vs-hand
+# cohort instead of even attempting the batter-specific tier.
 MIN_HEAD_TO_HEAD_PITCHES = 10
 
-# Step 2: below this many pitches at the exact (balls, strikes) count
-# within the resolved matchup, relax to the count's ahead/even/behind
-# bucket instead.
-MIN_EXACT_COUNT_PITCHES = 8
+# Step 2: the floor a candidate pool must clear before its filters stop
+# widening. Applies at every step of the cascade in the module
+# docstring above — count first, then (if that was the batter tier)
+# matchup identity — so a prediction is never based on fewer than this
+# many historical pitches when a bigger pool is available by relaxing
+# a lower-priority filter.
+MIN_CANDIDATE_SAMPLE = 25
 
 # 3-2 is an explicit exception (full count is its own high-leverage
 # bucket, not treated as batter-favorable despite balls > strikes);
@@ -125,48 +133,94 @@ def resolve_matchup_identity(
     )
 
 
+def _count_levels(situation: ApiSituation) -> list[tuple[str, str, dict]]:
+    """The three progressively looser count filters tried at each
+    matchup tier, tightest first."""
+    bucket = count_bucket(situation.balls, situation.strikes)
+    return [
+        (
+            "exact",
+            "balls = $balls AND strikes = $strikes",
+            {"balls": situation.balls, "strikes": situation.strikes},
+        ),
+        ("bucket", f"({COUNT_BUCKET_SQL}) = $bucket", {"bucket": bucket}),
+        ("any_count", "1 = 1", {}),
+    ]
+
+
+def _resolve_pool_filters(
+    con: duckdb.DuckDBPyConnection,
+    table_name: str,
+    situation: ApiSituation,
+    identity: MatchupIdentity,
+) -> tuple[MatchupIdentity, str, dict]:
+    """Step 2: widens the count filter, and if needed the matchup tier
+    itself, until the pool reaches MIN_CANDIDATE_SAMPLE. See the module
+    docstring for the exact cascade order. Returns whichever
+    (tier, count_where, params) combination first cleared the floor,
+    or — in the unreachable-in-practice case that nothing does — the
+    single largest pool any combination produced."""
+    tiers = [identity]
+    if identity.tier == "batter":
+        tiers.append(
+            MatchupIdentity(
+                tier="hand_cohort",
+                where_sql="player_name = $player_name AND stand = $b_hand",
+                params={"player_name": situation.player_name, "b_hand": situation.b_hand},
+            )
+        )
+
+    best: tuple[MatchupIdentity, str, dict, int] | None = None
+    for tier in tiers:
+        for level_name, count_where, count_extra in _count_levels(situation):
+            params = {**tier.params, **count_extra}
+            n = con.cursor().execute(
+                f"SELECT count(*) FROM {table_name} WHERE {tier.where_sql} AND {count_where}",
+                params,
+            ).fetchone()[0]
+
+            if best is None or n > best[3]:
+                best = (tier, count_where, params, n)
+
+            if n >= MIN_CANDIDATE_SAMPLE:
+                if not (tier is identity and level_name == "exact"):
+                    print(
+                        f"[knn] widened filters for {situation.player_name} "
+                        f"{situation.balls}-{situation.strikes}: {tier.tier}/{level_name} "
+                        f"reached {n} pitches (>= {MIN_CANDIDATE_SAMPLE})"
+                    )
+                return tier, count_where, params
+
+    # Nothing cleared the floor anywhere in the cascade (should be
+    # essentially unreachable — hand_cohort/any_count is just "this
+    # pitcher's full history vs. this hand"). Use the largest pool found
+    # rather than erroring on a technically-valid, just very thin, matchup.
+    tier, count_where, params, n = best
+    print(
+        f"[knn] no filter combination reached {MIN_CANDIDATE_SAMPLE} pitches for "
+        f"{situation.player_name} {situation.balls}-{situation.strikes} — using the "
+        f"largest available pool ({tier.tier}, {n} pitches)"
+    )
+    return tier, count_where, params
+
+
 def fetch_historical_topk(
     con: duckdb.DuckDBPyConnection,
     table_name: str,
     situation: ApiSituation,
     k: int = CANDIDATE_POOL_SIZE,
 ) -> tuple[pd.DataFrame, MatchupIdentity]:
-    """Resolves matchup identity (step 1) and count (step 2), then
-    ranks whatever pool those hard filters leave by the distance
-    formula. Returns the identity alongside the DataFrame so callers
-    (main.py's _candidate_pool) can scope the live session pool to the
-    same tier.
+    """Resolves matchup identity (step 1) and widens count/tier filters
+    until the pool reaches MIN_CANDIDATE_SAMPLE (step 2), then ranks
+    whatever pool that leaves by the distance formula. Returns the tier
+    actually used alongside the DataFrame so callers (main.py's
+    _candidate_pool) can scope the live session pool to match.
 
     Uses a fresh cursor off the shared connection so concurrent
     requests don't contend for the same DuckDB connection object.
     """
     identity = resolve_matchup_identity(con, table_name, situation)
-
-    count_params = {
-        **identity.params,
-        "balls": situation.balls,
-        "strikes": situation.strikes,
-    }
-    exact_count_n = con.cursor().execute(
-        f"SELECT count(*) FROM {table_name} WHERE {identity.where_sql} "
-        f"AND balls = $balls AND strikes = $strikes",
-        count_params,
-    ).fetchone()[0]
-
-    if exact_count_n >= MIN_EXACT_COUNT_PITCHES:
-        count_where = "balls = $balls AND strikes = $strikes"
-    else:
-        # Rare fallback — even the exact count is too thin within this
-        # matchup for a reliable neighbor set. Logged because this
-        # should be an unusual event, not a routine cascade step.
-        bucket = count_bucket(situation.balls, situation.strikes)
-        print(
-            f"[knn] count fallback: {situation.player_name} ({identity.tier}) "
-            f"{situation.balls}-{situation.strikes} only had {exact_count_n} pitches "
-            f"(< {MIN_EXACT_COUNT_PITCHES}) — relaxing to '{bucket}' bucket"
-        )
-        count_where = f"({COUNT_BUCKET_SQL}) = $bucket"
-        count_params["bucket"] = bucket
+    tier, count_where, count_params = _resolve_pool_filters(con, table_name, situation, identity)
 
     query = f"""
         SELECT *,
@@ -181,7 +235,7 @@ def fetch_historical_topk(
                  THEN 0.0 ELSE {INNING_PENALTY} END
           AS distance
         FROM {table_name}
-        WHERE {identity.where_sql} AND {count_where}
+        WHERE {tier.where_sql} AND {count_where}
         -- (game_pk, at_bat_number, pitch_number) breaks ties
         -- deterministically among the many rows that share a distance,
         -- preferring more recent games first.
@@ -190,6 +244,8 @@ def fetch_historical_topk(
     """
     params = {
         **count_params,
+        "balls": situation.balls,
+        "strikes": situation.strikes,
         "outs": situation.outs,
         "on1": situation.runners.on_1b,
         "on2": situation.runners.on_2b,
@@ -199,7 +255,7 @@ def fetch_historical_topk(
         "k": k,
     }
     df = con.cursor().execute(query, params).fetchdf()
-    return df, identity
+    return df, tier
 
 
 def _runners_mismatch(df: pd.DataFrame, situation: ApiSituation) -> pd.Series:
