@@ -17,9 +17,16 @@ class ApiRunnerState(BaseModel):
 
 class ApiSituation(BaseModel):
     player_name: str
+    # MLBAM ids (same id space as Statcast's pitcher/batter columns) —
+    # used for the head-to-head matchup lookup and, when it clears the
+    # threshold, the batter-specific query itself. See knn.py's
+    # resolve_matchup_identity().
+    pitcher_id: str
+    batter_id: str
     # Must already be resolved to "L"/"R" by the caller — a switch
     # hitter ("S") has no fixed side, it depends on which pitcher they're
-    # facing. See handedness.py's resolve_batter_handedness().
+    # facing. See handedness.py's resolve_batter_handedness(). Used for
+    # the pitcher-vs-batter-hand fallback cohort.
     b_hand: Handedness
     balls: Literal[0, 1, 2, 3]
     strikes: Literal[0, 1, 2]

@@ -59,6 +59,8 @@ function buildSituation(
   }
   return {
     player_name: pitcher.statcastName,
+    pitcher_id: pitcher.id,
+    batter_id: batter.id,
     b_hand: resolveBatterHandedness(pitcher.throws ?? "R", batter.bats ?? "R"),
     balls: gameState.balls,
     strikes: gameState.strikes,

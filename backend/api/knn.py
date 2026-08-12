@@ -1,17 +1,34 @@
 """Weighted-KNN "similar historical situations" engine.
 
-Distance formula (lower = more similar), per the system spec:
+Two hard-filter fallback hierarchies run before the distance formula
+ever sees a row:
+
+1. Matchup identity (resolve_matchup_identity): prefer this specific
+   pitcher/batter's own head-to-head history; fall back to the
+   pitcher-vs-batter-hand cohort when they haven't faced each other
+   enough times for a reliable neighbor set.
+2. Count (fetch_historical_topk): prefer the exact (balls, strikes)
+   count within the resolved matchup pool; fall back to the broader
+   ahead/even/behind bucket (count_bucket) when even the exact count is
+   too thin. This is meant to be a rare, logged event — not a routine
+   step in the cascade.
+
+Distance formula (lower = more similar), applied to whatever pool step
+1+2 leaves — count no longer appears here since it's a hard filter
+above, though the balls/strikes terms still do useful ranking work
+within a bucket-fallback pool (preferring rows closer to the actual
+count even when the bucket had to be widened):
     distance = |Δballs| × 5.83 + |Δstrikes| × 8.75 + |Δouts| × 5.0
              + runners_penalty(15.0 if any base occupancy differs)
              + inning_penalty(5.0 if inning+half differs)
 
-The historical baseline (2M+ rows) is queried directly in SQL —
-fetch_historical_topk() pushes the handedness anchor, the distance
-formula, and the top-k selection into DuckDB itself, so the full table
-is never loaded into Python memory. This is what lets the service run
-on a 512MB instance instead of needing >1GB just to hold a static
-dataset in RAM (measured: loading the whole table into a DataFrame
-takes ~410MB on its own, before the rest of the process's overhead).
+The historical baseline (2M+ rows) is queried directly in SQL — the
+matchup/count filters and the distance formula and the top-k selection
+are all pushed into DuckDB itself, so the full table is never loaded
+into Python memory. This is what lets the service run on a 512MB
+instance instead of needing >1GB just to hold a static dataset in RAM
+(measured: loading the whole table into a DataFrame takes ~410MB on
+its own, before the rest of the process's overhead).
 
 Live session pitches (a handful per game, already in memory) get
 special treatment: any session pitch matching the current count/
@@ -22,6 +39,9 @@ truncating back to CANDIDATE_POOL_SIZE.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
 
 import duckdb
 import pandas as pd
@@ -37,27 +57,117 @@ INNING_PENALTY = 5.0
 CANDIDATE_POOL_SIZE = 50
 SESSION_EXACT_MATCH_DUPLICATE_FACTOR = 2
 
+# Step 1: below this many head-to-head pitches, a specific batter's
+# history is too thin to trust — fall back to the pitcher-vs-hand
+# cohort instead. The cohort itself has no separate threshold: a
+# pitcher with any MLB track record will trivially clear this many
+# pitches against both lefties and righties, so there's no realistic
+# case where the cohort itself needs a further fallback.
+MIN_HEAD_TO_HEAD_PITCHES = 10
+
+# Step 2: below this many pitches at the exact (balls, strikes) count
+# within the resolved matchup, relax to the count's ahead/even/behind
+# bucket instead.
+MIN_EXACT_COUNT_PITCHES = 8
+
+# 3-2 is an explicit exception (full count is its own high-leverage
+# bucket, not treated as batter-favorable despite balls > strikes);
+# every other count falls out of the balls-vs-strikes comparison.
+COUNT_BUCKET_SQL = """
+    CASE
+        WHEN (balls = 3 AND strikes = 2) OR balls = strikes THEN 'even'
+        WHEN strikes > balls THEN 'ahead'
+        ELSE 'behind'
+    END
+"""
+
+
+def count_bucket(balls: int, strikes: int) -> str:
+    """Python mirror of COUNT_BUCKET_SQL, for computing the target
+    bucket value to bind as a query parameter."""
+    if (balls == 3 and strikes == 2) or balls == strikes:
+        return "even"
+    if strikes > balls:
+        return "ahead"
+    return "behind"
+
+
+@dataclass
+class MatchupIdentity:
+    tier: Literal["batter", "hand_cohort"]
+    where_sql: str
+    params: dict
+
+
+def resolve_matchup_identity(
+    con: duckdb.DuckDBPyConnection, table_name: str, situation: ApiSituation
+) -> MatchupIdentity:
+    """Step 1 of the fallback hierarchy. situation.b_hand must already
+    be resolved to "L"/"R" (see handedness.py) — the hand_cohort branch
+    reuses it as-is."""
+    pitcher_id = int(situation.pitcher_id)
+    batter_id = int(situation.batter_id)
+    h2h_count = con.cursor().execute(
+        f"SELECT count(*) FROM {table_name} WHERE pitcher = $pitcher_id AND batter = $batter_id",
+        {"pitcher_id": pitcher_id, "batter_id": batter_id},
+    ).fetchone()[0]
+
+    if h2h_count >= MIN_HEAD_TO_HEAD_PITCHES:
+        return MatchupIdentity(
+            tier="batter",
+            where_sql="pitcher = $pitcher_id AND batter = $batter_id",
+            params={"pitcher_id": pitcher_id, "batter_id": batter_id},
+        )
+    return MatchupIdentity(
+        tier="hand_cohort",
+        where_sql="player_name = $player_name AND stand = $b_hand",
+        params={"player_name": situation.player_name, "b_hand": situation.b_hand},
+    )
+
 
 def fetch_historical_topk(
     con: duckdb.DuckDBPyConnection,
     table_name: str,
     situation: ApiSituation,
     k: int = CANDIDATE_POOL_SIZE,
-) -> pd.DataFrame:
-    """The spec anchors the engine "strictly by Batter Handedness":
-    same-handedness pitches are a hard filter (WHERE), not one of the
-    weighted distance terms — a pitcher's approach to lefties and
-    righties is a fundamentally different distribution, not a matter of
-    degree.
-
-    situation.b_hand must already be resolved to "L"/"R" — "S" will
-    never match any historical row, since Statcast's `stand` records
-    the batter's actual side per plate appearance and is never
-    literally "S" (see handedness.py).
+) -> tuple[pd.DataFrame, MatchupIdentity]:
+    """Resolves matchup identity (step 1) and count (step 2), then
+    ranks whatever pool those hard filters leave by the distance
+    formula. Returns the identity alongside the DataFrame so callers
+    (main.py's _candidate_pool) can scope the live session pool to the
+    same tier.
 
     Uses a fresh cursor off the shared connection so concurrent
     requests don't contend for the same DuckDB connection object.
     """
+    identity = resolve_matchup_identity(con, table_name, situation)
+
+    count_params = {
+        **identity.params,
+        "balls": situation.balls,
+        "strikes": situation.strikes,
+    }
+    exact_count_n = con.cursor().execute(
+        f"SELECT count(*) FROM {table_name} WHERE {identity.where_sql} "
+        f"AND balls = $balls AND strikes = $strikes",
+        count_params,
+    ).fetchone()[0]
+
+    if exact_count_n >= MIN_EXACT_COUNT_PITCHES:
+        count_where = "balls = $balls AND strikes = $strikes"
+    else:
+        # Rare fallback — even the exact count is too thin within this
+        # matchup for a reliable neighbor set. Logged because this
+        # should be an unusual event, not a routine cascade step.
+        bucket = count_bucket(situation.balls, situation.strikes)
+        print(
+            f"[knn] count fallback: {situation.player_name} ({identity.tier}) "
+            f"{situation.balls}-{situation.strikes} only had {exact_count_n} pitches "
+            f"(< {MIN_EXACT_COUNT_PITCHES}) — relaxing to '{bucket}' bucket"
+        )
+        count_where = f"({COUNT_BUCKET_SQL}) = $bucket"
+        count_params["bucket"] = bucket
+
     query = f"""
         SELECT *,
             ABS(balls - $balls) * {BALLS_WEIGHT}
@@ -71,7 +181,7 @@ def fetch_historical_topk(
                  THEN 0.0 ELSE {INNING_PENALTY} END
           AS distance
         FROM {table_name}
-        WHERE player_name = $player_name AND stand = $stand
+        WHERE {identity.where_sql} AND {count_where}
         -- (game_pk, at_bat_number, pitch_number) breaks ties
         -- deterministically among the many rows that share a distance,
         -- preferring more recent games first.
@@ -79,19 +189,17 @@ def fetch_historical_topk(
         LIMIT $k
     """
     params = {
-        "balls": situation.balls,
-        "strikes": situation.strikes,
+        **count_params,
         "outs": situation.outs,
         "on1": situation.runners.on_1b,
         "on2": situation.runners.on_2b,
         "on3": situation.runners.on_3b,
         "inning": situation.inning,
         "topbot": situation.inning_topbot,
-        "player_name": situation.player_name,
-        "stand": situation.b_hand,
         "k": k,
     }
-    return con.cursor().execute(query, params).fetchdf()
+    df = con.cursor().execute(query, params).fetchdf()
+    return df, identity
 
 
 def _runners_mismatch(df: pd.DataFrame, situation: ApiSituation) -> pd.Series:

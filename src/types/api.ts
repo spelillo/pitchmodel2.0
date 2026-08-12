@@ -9,10 +9,22 @@ import { AtBatResult, Handedness, PitchCategory, PitchResultOutcome, PitchType }
 // camelCase domain types in "@/types" that the rest of the frontend
 // consumes — lib/predictionService.ts is the adapter between the two.
 //
-// Distance formula (weighted KNN, lower = more similar):
+// Matchup + count are hard filters, resolved server-side with a
+// fallback hierarchy before the distance formula ever runs:
+//   1. pitcher_id + batter_id head-to-head history, if they've faced
+//      each other >= 10 times; else pitcher_id + b_hand (batter's
+//      resolved hand) cohort.
+//   2. balls + strikes exact match, if that matchup has >= 8 pitches
+//      at that exact count; else the ahead/even/behind count bucket
+//      (rare — logged server-side when it fires).
+//
+// Distance formula (weighted KNN over whatever pool step 1+2 leaves,
+// lower = more similar):
 //   distance = |Δballs| × 5.83 + |Δstrikes| × 8.75 + |Δouts| × 5.0
 //            + runnersPenalty(15.0 if any base mismatches)
 //            + inningPenalty(5.0 if inning string mismatches)
+// (balls/strikes terms are no-ops within an exact-count pool, but still
+// rank rows within a bucket-fallback pool.)
 // Session pitches matching the live count/outs/runners exactly score
 // distance = 0.0 and are double-counted (2x weight) in the candidate
 // pool before combining with the top 50 historical matches.
@@ -27,9 +39,15 @@ export interface ApiRunnerState {
 /** Shared situational payload used by both endpoints below. */
 export interface ApiSituation {
   player_name: string;
+  // MLBAM ids (same id space as Statcast's `pitcher`/`batter` columns
+  // and Player.id) — used for the head-to-head matchup lookup and,
+  // when it clears the threshold, the batter-specific query itself.
+  pitcher_id: string;
+  batter_id: string;
   // Must already be resolved to "L"/"R" by the caller — a switch hitter
   // ("S") has no fixed side, it depends on which pitcher they're facing.
-  // See @/lib/handedness's resolveBatterHandedness().
+  // See @/lib/handedness's resolveBatterHandedness(). Used for the
+  // pitcher-vs-batter-hand fallback cohort.
   b_hand: Handedness;
   balls: 0 | 1 | 2 | 3;
   strikes: 0 | 1 | 2;

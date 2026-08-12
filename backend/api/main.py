@@ -79,10 +79,17 @@ app.add_middleware(
 def _candidate_pool(payload: ApiSituation) -> pd.DataFrame:
     if BASE_CON is None:
         raise HTTPException(status_code=503, detail="Database not connected yet")
-    historical_topk = fetch_historical_topk(BASE_CON, TABLE_NAME, payload)
-    session_df = SESSION_STORE.pitches_as_dataframe(
-        payload.session_id, player_name=payload.player_name, stand=payload.b_hand
-    )
+    historical_topk, identity = fetch_historical_topk(BASE_CON, TABLE_NAME, payload)
+    if identity.tier == "batter":
+        session_df = SESSION_STORE.pitches_as_dataframe(
+            payload.session_id,
+            pitcher_id=int(payload.pitcher_id),
+            batter_id=int(payload.batter_id),
+        )
+    else:
+        session_df = SESSION_STORE.pitches_as_dataframe(
+            payload.session_id, player_name=payload.player_name, stand=payload.b_hand
+        )
     return combine_with_session(historical_topk, payload, session_df)
 
 
@@ -150,6 +157,8 @@ def log_pitch(payload: LogPitchApiRequest) -> LogPitchApiResponse:
         LoggedPitch(
             player_name=payload.player_name,
             stand=payload.b_hand,
+            pitcher_id=int(payload.pitcher_id),
+            batter_id=int(payload.batter_id),
             balls=payload.balls,
             strikes=payload.strikes,
             outs_when_up=payload.outs,
