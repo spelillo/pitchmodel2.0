@@ -100,6 +100,11 @@
     height: 0;
   }
 
+  /* Round indicator dots (e.g. outs) — opt out of the global sharp-corner reset */
+  .dot-indicator {
+    border-radius: 9999px !important;
+  }
+
   .retro-link {
     color: #0000ff;
     text-decoration: underline;

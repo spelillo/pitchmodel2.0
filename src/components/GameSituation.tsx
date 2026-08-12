@@ -69,21 +69,18 @@ export function GameSituation({
 
       <hr className="groove mx-3" />
 
-      <div className="p-3">
-        <OutsControl active={gameState.outs} onChange={onOutsChange} />
-      </div>
-
-      <hr className="groove mx-3" />
-
       <div className="grid grid-cols-[auto_1fr] gap-3 p-3">
         <BaseDiamond runners={gameState.runners} onToggle={onToggleRunner} />
         <div className="flex flex-col gap-3">
-          <InningControl
-            inning={gameState.inning}
-            half={gameState.inningHalf}
-            onInningChange={onInningChange}
-            onHalfChange={onInningHalfChange}
-          />
+          <div className="flex items-end gap-4">
+            <InningControl
+              inning={gameState.inning}
+              half={gameState.inningHalf}
+              onInningChange={onInningChange}
+              onHalfChange={onInningHalfChange}
+            />
+            <OutsControl active={gameState.outs} onChange={onOutsChange} />
+          </div>
           <PitchThrownSelector
             predictedPitch={predictedPitch}
             selected={pitchThrown}
